@@ -1,7 +1,9 @@
 name: Test Image
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - fix/cn-provider-apikey-account-test
 
 permissions:
   contents: read
