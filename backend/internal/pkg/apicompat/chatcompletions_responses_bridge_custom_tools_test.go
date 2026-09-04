@@ -133,6 +133,37 @@ func TestEffectiveResponsesTools_SkipsStringInputItems(t *testing.T) {
 	assert.Equal(t, "exec", tools[0].Name)
 }
 
+func TestEffectiveResponsesTools_PromotesToolSearchOutputDiscoveries(t *testing.T) {
+	req := &ResponsesRequest{
+		Model: "glm-5.3-flash",
+		Tools: []ResponsesTool{{Type: "tool_search"}},
+		Input: json.RawMessage(`[
+			{"type":"tool_search_call","call_id":"search_1","arguments":{"query":"Exa"},"status":"completed"},
+			{"type":"tool_search_output","call_id":"search_1","execution":"client","status":"completed","tools":[
+				{"type":"namespace","name":"mcp__codex_apps__exa","description":"Web search for AI agents","tools":[
+					{"type":"function","name":"_web_search_exa","description":"Search the web","defer_loading":true,"parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}},
+					{"type":"function","name":"_web_fetch_exa","description":"Fetch a page","defer_loading":true,"parameters":{"type":"object","properties":{"urls":{"type":"array","items":{"type":"string"}}},"required":["urls"],"additionalProperties":false}}
+				]}
+			]}
+		]`),
+	}
+
+	effective, err := EffectiveResponsesTools(req)
+	require.NoError(t, err)
+	require.Len(t, effective, 2)
+	assert.Equal(t, "tool_search", effective[0].Type)
+	assert.Equal(t, "namespace", effective[1].Type)
+	assert.Equal(t, "mcp__codex_apps__exa", effective[1].Name)
+	require.Len(t, effective[1].Tools, 2)
+
+	out, err := ResponsesToChatCompletionsRequest(req)
+	require.NoError(t, err)
+	require.Len(t, out.Tools, 3)
+	assert.Equal(t, "tool_search", out.Tools[0].Function.Name)
+	assert.Equal(t, "mcp__codex_apps__exa___web_search_exa", out.Tools[1].Function.Name)
+	assert.Equal(t, "mcp__codex_apps__exa___web_fetch_exa", out.Tools[2].Function.Name)
+}
+
 func TestEffectiveResponsesTools_IgnoresMalformedToolsOnNonAdditionalItem(t *testing.T) {
 	req := &ResponsesRequest{
 		Input: json.RawMessage(`[
@@ -595,6 +626,25 @@ func TestResponsesInputToChatMessages_ToolSearchCallHistory(t *testing.T) {
 	assert.Equal(t, "tool", messages[2].Role)
 	assert.Equal(t, "call_s", messages[2].ToolCallID)
 	assert.JSONEq(t, `"{\"groups\":[\"gmail\"]}"`, string(messages[2].Content))
+}
+
+func TestResponsesInputToChatMessages_ToolSearchOutputUsesToolsWhenOutputMissing(t *testing.T) {
+	input := json.RawMessage(`[
+		{"type":"tool_search_call","call_id":"call_s","arguments":{"query":"Exa"}},
+		{"type":"tool_search_output","call_id":"call_s","execution":"client","status":"completed","tools":[
+			{"type":"namespace","name":"mcp__codex_apps__exa","tools":[{"type":"function","name":"_web_search_exa"}]}
+		]}
+	]`)
+
+	messages, err := responsesInputToChatMessages("", input)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "tool", messages[1].Role)
+	assert.Equal(t, "call_s", messages[1].ToolCallID)
+	assert.JSONEq(t,
+		`"[{\"type\":\"namespace\",\"name\":\"mcp__codex_apps__exa\",\"tools\":[{\"type\":\"function\",\"name\":\"_web_search_exa\"}]}]"`,
+		string(messages[1].Content),
+	)
 }
 
 func TestResponsesInputToChatMessages_NamespacedFunctionCallHistory(t *testing.T) {

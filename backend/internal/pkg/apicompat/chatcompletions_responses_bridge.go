@@ -141,7 +141,48 @@ func EffectiveResponsesTools(req *ResponsesRequest) ([]ResponsesTool, error) {
 		}
 		tools = append(tools, item.Tools...)
 	}
-	return tools, nil
+
+	// Codex tool_search keeps discovered tools in the tool_search_output history
+	// item instead of injecting them into the next request's top-level tools.
+	// Native Responses servers understand that history item directly, but a
+	// Chat Completions upstream only sees the declarations we explicitly convert
+	// into chat tools. Reuse the client-tool promotion logic here so discovered
+	// function/custom/namespace tools become callable on the follow-up request.
+	if !HasToolSearchTool(tools) {
+		return tools, nil
+	}
+	rawTools, err := json.Marshal(tools)
+	if err != nil {
+		return nil, fmt.Errorf("marshal effective responses tools for tool search discovery: %w", err)
+	}
+	var genericTools []any
+	if err := json.Unmarshal(rawTools, &genericTools); err != nil {
+		return nil, fmt.Errorf("decode effective responses tools for tool search discovery: %w", err)
+	}
+	var genericInput []any
+	if err := json.Unmarshal(inputRaw, &genericInput); err != nil {
+		return nil, fmt.Errorf("decode responses input for tool search discovery: %w", err)
+	}
+	genericReq := map[string]any{
+		"tools": genericTools,
+		"input": genericInput,
+	}
+	promoted, err := promoteResponsesToolSearchDiscoveries(genericReq)
+	if err != nil {
+		return nil, err
+	}
+	if !promoted {
+		return tools, nil
+	}
+	promotedRaw, err := json.Marshal(genericReq["tools"])
+	if err != nil {
+		return nil, fmt.Errorf("marshal promoted responses tools: %w", err)
+	}
+	var effective []ResponsesTool
+	if err := json.Unmarshal(promotedRaw, &effective); err != nil {
+		return nil, fmt.Errorf("decode promoted responses tools: %w", err)
+	}
+	return effective, nil
 }
 
 // CustomToolNames 收集 Responses 请求中 custom/freeform 工具的名字。chat 桥回程时
@@ -456,6 +497,12 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 			continue
 		case "function_call_output", "custom_tool_call_output", "tool_search_output":
 			outputRaw := bytesTrimSpace(item["output"])
+			if itemType == "tool_search_output" && len(outputRaw) == 0 {
+				// Codex 0.153+ places client search results in tools[] rather than
+				// output. Preserve those discoveries as the Chat Completions tool
+				// message content so the model can see what the search returned.
+				outputRaw = bytesTrimSpace(item["tools"])
+			}
 			callID := rawString(item["call_id"])
 			if callID == "" && invalidEmptyFunctionCallOutputs > 0 {
 				invalidEmptyFunctionCallOutputs--

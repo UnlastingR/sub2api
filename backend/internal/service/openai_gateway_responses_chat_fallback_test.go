@@ -60,6 +60,52 @@ func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletion
 	require.False(t, result.Stream)
 }
 
+func TestForwardResponses_ForceChatCompletionsPromotesToolSearchDiscovery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{
+		"model":"glm-5.3-flash",
+		"stream":false,
+		"tools":[{"type":"tool_search"}],
+		"input":[
+			{"type":"tool_search_call","call_id":"call_search","arguments":{"query":"Exa"},"status":"completed"},
+			{"type":"tool_search_output","call_id":"call_search","execution":"client","status":"completed","tools":[
+				{"type":"namespace","name":"mcp__codex_apps__exa","description":"Web search for AI agents","tools":[
+					{"type":"function","name":"_web_search_exa","description":"Search the web","defer_loading":true,"parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}}
+				]}
+			]}
+		]
+	}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"chatcmpl_exa","object":"chat.completion","model":"glm-5.3-flash","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_exa","type":"function","function":{"name":"mcp__codex_apps__exa___web_search_exa","arguments":"{\"query\":\"today's news\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}`,
+		)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+	}
+
+	result, err := svc.Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "http://upstream.example/v1/chat/completions", upstream.lastReq.URL.String())
+	require.Equal(t, "tool_search", gjson.GetBytes(upstream.lastBody, "tools.0.function.name").String())
+	require.Equal(t, "mcp__codex_apps__exa___web_search_exa", gjson.GetBytes(upstream.lastBody, "tools.1.function.name").String())
+	require.Equal(t, "tool", gjson.GetBytes(upstream.lastBody, "messages.1.role").String())
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "messages.1.content").String(), "_web_search_exa")
+	require.Equal(t, "function_call", gjson.Get(rec.Body.String(), "output.0.type").String())
+	require.Equal(t, "_web_search_exa", gjson.Get(rec.Body.String(), "output.0.name").String())
+	require.Equal(t, "mcp__codex_apps__exa", gjson.Get(rec.Body.String(), "output.0.namespace").String())
+}
+
 // Scenario: 第三方无推理模型不收到兼容档位。
 func TestForwardResponses_ForceChatCompletionsOmitsNoneReasoningEffort(t *testing.T) {
 	gin.SetMode(gin.TestMode)
