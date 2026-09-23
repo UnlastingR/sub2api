@@ -83,6 +83,11 @@ func (h *AccountHandler) SetOpenCodeGoUsageService(usage *service.OpenCodeGoUsag
 	h.opencodeGoUsage = usage
 }
 
+// SetCodexTicketSettings supplies the live policy without mutating shared config.
+func (h *AccountHandler) SetCodexTicketSettings(settings *service.SettingService) {
+	h.codexTicketSettings = settings
+}
+
 // NewAccountHandler creates a new admin account handler
 func NewAccountHandler(
 	adminService service.AdminService,
