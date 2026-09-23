@@ -103,6 +103,7 @@ type relayState struct {
 	usage                   Usage
 	turnUsage               Usage
 	turnWroteDownstream     atomic.Bool
+	turnGeneration          atomic.Uint64
 	requestModelMu          sync.RWMutex
 	requestModel            string
 	pendingTurnStart        atomic.Pointer[time.Time]
@@ -182,6 +183,7 @@ func Relay(
 	startAt := nowFn()
 	state := &relayState{requestModel: result.RequestModel}
 	if isClientResponseCreateFrame(firstMessageType, firstClientMessage) {
+		state.turnGeneration.Store(1)
 		firstTurnStartedAt := options.FirstTurnStartedAt
 		if firstTurnStartedAt.IsZero() {
 			firstTurnStartedAt = startAt
@@ -207,6 +209,7 @@ func Relay(
 	writeClientFrameUpstream := func(msgType coderws.MessageType, payload []byte) error {
 		isResponseCreate := isClientResponseCreateFrame(msgType, payload)
 		if isResponseCreate {
+			state.turnGeneration.Add(1)
 			state.setRequestModel(strings.TrimSpace(gjson.GetBytes(payload, "model").String()))
 			turnStartedAt := time.Time{}
 			if options.TakeNextTurnStartedAt != nil {
@@ -570,6 +573,10 @@ func runUpstreamToClient(
 			return
 		}
 		markActivity()
+		turnGeneration := uint64(0)
+		if state != nil {
+			turnGeneration = state.turnGeneration.Load()
+		}
 		if beforeWriteClient != nil {
 			wroteDownstreamInTurn := wroteDownstream
 			if state != nil {
@@ -654,7 +661,12 @@ func runUpstreamToClient(
 		}
 		wroteDownstream = true
 		if state != nil {
-			state.turnWroteDownstream.Store(true)
+			// A previous turn's client write may complete after the next
+			// response.create has already reset the per-turn flag. Do not let
+			// that stale completion mark the new turn as having written output.
+			if state.turnGeneration.Load() == turnGeneration {
+				state.turnWroteDownstream.Store(true)
+			}
 		}
 		if afterWriteClient != nil {
 			afterWriteClient(msgType, payload)
