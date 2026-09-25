@@ -245,4 +245,3 @@ func (s *OpenAIGatewayService) buildCodexHistoryNotesRequest(
 	account.ApplyHeaderOverrides(req.Header)
 	return req, nil
 }
-

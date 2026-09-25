@@ -84,4 +84,3 @@ func (h *OpenAIGatewayHandler) HistoryNotes(c *gin.Context) {
 	}
 	c.Data(result.StatusCode, contentType, result.Body)
 }
-
