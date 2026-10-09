@@ -1,9 +1,9 @@
 name: CI
 
 on:
-  push:
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -36,7 +36,8 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: Verify Go version
         run: |
-          go version | grep -q 'go1.27.2'
+          expected_version="$(awk '$1 == "go" { print $2; exit }' backend/go.mod)"
+          go version | grep -Fq "go${expected_version}"
       - name: Unit tests
         working-directory: backend
         run: make test-unit
@@ -55,7 +56,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'pnpm'
           cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install frontend dependencies
@@ -76,7 +77,8 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: Verify Go version
         run: |
-          go version | grep -q 'go1.27.2'
+          expected_version="$(awk '$1 == "go" { print $2; exit }' backend/go.mod)"
+          go version | grep -Fq "go${expected_version}"
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:

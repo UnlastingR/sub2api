@@ -15,7 +15,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ci:
+    uses: ./.github/workflows/backend-ci.yml
+
   build-and-push:
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
