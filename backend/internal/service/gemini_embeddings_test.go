@@ -162,3 +162,20 @@ func TestGeminiEmbeddingsNativeSingleAccountMappingPreservesOtherFields(t *testi
 	require.Equal(t, int64(128), gjson.GetBytes(mapped, "outputDimensionality").Int())
 	require.True(t, bytes.Contains(mapped, []byte("hello")))
 }
+
+func TestGeminiEmbeddingsCompositeMappingUpdatesBatchModels(t *testing.T) {
+	body := `{"model":"embedding-alias","input":"hello"}`
+	c, rec := embeddingTestContext(body)
+	_, nativeBody, err := PrepareGeminiEmbeddingsRequest(c, []byte(body))
+	require.NoError(t, err)
+	ctx := WithCompositeRouteDecision(context.Background(), CompositeRouteDecision{
+		Matched: true, TargetPlatform: PlatformGemini, PublicModel: "embedding-alias", UpstreamModel: "gemini-embedding-2",
+	})
+	svc, stub := newGeminiEmbeddingTestService(http.StatusOK, `{"embeddings":[{"values":[0.25]}],"usageMetadata":{"promptTokenCount":4}}`)
+	_, err = svc.ForwardNative(ctx, c, geminiSignalTestAccount(), "gemini-embedding-2", "batchEmbedContents", false, nativeBody)
+	require.NoError(t, err)
+	sent, err := io.ReadAll(stub.lastReq.Body)
+	require.NoError(t, err)
+	require.Equal(t, "models/gemini-embedding-2", gjson.GetBytes(sent, "requests.0.model").String())
+	require.Equal(t, "embedding-alias", gjson.Get(rec.Body.String(), "model").String())
+}

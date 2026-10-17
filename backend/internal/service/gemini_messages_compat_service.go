@@ -1100,7 +1100,9 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		mappedModel = account.GetMappedModel(originalModel)
 	}
 
-	if (action == "embedContent" || action == "batchEmbedContents") && mappedModel != originalModel {
+	publicModel, _ := RequestedPublicModelFromContext(ctx)
+	if (action == "embedContent" || action == "batchEmbedContents") &&
+		(mappedModel != originalModel || (publicModel != "" && strings.TrimPrefix(publicModel, "models/") != mappedModel)) {
 		var err error
 		body, err = mapGeminiEmbeddingRequestModels(body, mappedModel, action)
 		if err != nil {
