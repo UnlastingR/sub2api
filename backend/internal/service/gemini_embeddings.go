@@ -34,15 +34,15 @@ type geminiOpenAIEmbeddingRequest struct {
 func parseGeminiEmbeddingsRequest(body []byte) (*geminiOpenAIEmbeddingRequest, []string, error) {
 	var req geminiOpenAIEmbeddingRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		return nil, nil, errors.New("Invalid embeddings request body")
+		return nil, nil, errors.New("invalid embeddings request body")
 	}
 	req.Model = strings.TrimSpace(req.Model)
 	model := strings.TrimPrefix(req.Model, "models/")
 	if !IsSafeGeminiModelPathSegment(model) {
-		return nil, nil, errors.New("A valid embedding model is required")
+		return nil, nil, errors.New("a valid embedding model is required")
 	}
 	if req.Stream {
-		return nil, nil, errors.New("Embeddings do not support streaming")
+		return nil, nil, errors.New("embeddings do not support streaming")
 	}
 	if req.EncodingFormat == "" {
 		req.EncodingFormat = "float"
@@ -120,7 +120,7 @@ func GeminiEmbeddingsOriginalBody(c *gin.Context) []byte {
 func mapGeminiEmbeddingRequestModels(body []byte, model, action string) ([]byte, error) {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(body, &root); err != nil || root == nil {
-		return nil, errors.New("Invalid embedding request")
+		return nil, errors.New("invalid embedding request")
 	}
 	mapped, err := json.Marshal("models/" + model)
 	if err != nil {
@@ -137,7 +137,7 @@ func mapGeminiEmbeddingRequestModels(body []byte, model, action string) ([]byte,
 		}
 		for _, request := range requests {
 			if request == nil {
-				return nil, errors.New("Invalid embedding batch item")
+				return nil, errors.New("invalid embedding batch item")
 			}
 			request["model"] = mapped
 		}
