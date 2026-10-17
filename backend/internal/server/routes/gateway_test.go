@@ -375,10 +375,10 @@ func TestGatewayRoutesCompositeVideoGenerationAllowed(t *testing.T) {
 	require.NotContains(t, w.Body.String(), "not supported")
 }
 
-func TestGatewayRoutesCompositeOpenAIOnlyEndpointsRequireOpenAITarget(t *testing.T) {
+func TestGatewayRoutesCompositeEmbeddingsRejectUnsupportedTarget(t *testing.T) {
 	router := newGatewayRoutesTestRouter(service.PlatformComposite)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"model":"gemini-2.5-pro","input":"hello"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"model":"claude-sonnet-4-5","input":"hello"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -483,4 +483,22 @@ func TestGatewayRoutesOpenAICountTokensPathIsRegistered(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 	require.NotEqual(t, http.StatusNotFound, w.Code)
+}
+
+func TestGatewayRoutesGeminiEmbeddingsReachNativeAdapter(t *testing.T) {
+	for _, platform := range []string{service.PlatformGemini, service.PlatformComposite} {
+		for _, path := range []string{"/v1/embeddings", "/embeddings"} {
+			t.Run(platform+path, func(t *testing.T) {
+				router := newGatewayRoutesTestRouter(platform)
+				req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"gemini-embedding-2","input":"hello"}`))
+				req.Header.Set("Content-Type", "application/json")
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, req)
+				// Test auth intentionally omits the user: the native gateway must
+				// be reached and reject it before scheduling, instead of route 404.
+				require.Equal(t, http.StatusInternalServerError, w.Code)
+				require.Contains(t, w.Body.String(), "User context not found")
+			})
+		}
+	}
 }

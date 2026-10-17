@@ -1085,7 +1085,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	}
 
 	switch action {
-	case "generateContent", "streamGenerateContent", "countTokens":
+	case "generateContent", "streamGenerateContent", "countTokens", "embedContent", "batchEmbedContents":
 		// ok
 	default:
 		return nil, s.writeGoogleError(c, http.StatusNotFound, "Unsupported action: "+action)
@@ -1100,6 +1100,14 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		mappedModel = account.GetMappedModel(originalModel)
 	}
 
+	if (action == "embedContent" || action == "batchEmbedContents") && mappedModel != originalModel {
+		var err error
+		body, err = mapGeminiEmbeddingRequestModels(body, mappedModel, action)
+		if err != nil {
+			return nil, s.writeGoogleError(c, http.StatusBadRequest, "Invalid embedding request")
+		}
+	}
+
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
@@ -1112,7 +1120,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		useUpstreamStream = true
 		upstreamAction = "streamGenerateContent"
 	}
-	forceAIStudio := action == "countTokens"
+	forceAIStudio := action == "countTokens" || action == "embedContent" || action == "batchEmbedContents"
 
 	var requestIDHeader string
 	var buildReq func(ctx context.Context) (*http.Request, string, error)
@@ -2689,6 +2697,10 @@ func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Co
 			respBody = unwrappedBody
 		}
 	}
+	if options := geminiEmbeddingOptionsFromContext(c); options != nil {
+		return s.handleGeminiEmbeddingResponse(c, resp, respBody, options)
+	}
+
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)

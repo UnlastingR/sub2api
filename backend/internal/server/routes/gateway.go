@@ -239,6 +239,10 @@ func RegisterGatewayRoutes(
 			h.Gateway.ChatCompletions(c)
 		})
 		gateway.POST("/embeddings", textBodyLimit, func(c *gin.Context) {
+			if getGroupPlatform(c) == service.PlatformGemini {
+				h.Gateway.GeminiEmbeddings(c)
+				return
+			}
 			if !isOpenAIOnlyEndpointGatewayPlatform(c) {
 				service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
 				c.JSON(http.StatusNotFound, gin.H{
@@ -409,6 +413,10 @@ func RegisterGatewayRoutes(
 		h.Gateway.ChatCompletions(c)
 	})
 	rootRoute(http.MethodPost, "/embeddings", textBodyLimit, func(c *gin.Context) {
+		if getGroupPlatform(c) == service.PlatformGemini {
+			h.Gateway.GeminiEmbeddings(c)
+			return
+		}
 		if !isOpenAIOnlyEndpointGatewayPlatform(c) {
 			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
 			c.JSON(http.StatusNotFound, gin.H{

@@ -344,7 +344,11 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 	pricingCtx, pricingAt := service.WithGatewayTokenRequestPricing(c.Request.Context())
 	c.Request = c.Request.WithContext(pricingCtx)
 
-	if decision := h.checkSecurityAudit(c, reqLog, apiKey, authSubject, service.ContentModerationProtocolGemini, modelName, body); decision != nil && !decision.AllowNextStage {
+	auditProtocol, auditBody := service.ContentModerationProtocolGemini, body
+	if originalBody := service.GeminiEmbeddingsOriginalBody(c); originalBody != nil {
+		auditProtocol, auditBody = "openai_embeddings", originalBody
+	}
+	if decision := h.checkSecurityAudit(c, reqLog, apiKey, authSubject, auditProtocol, modelName, auditBody); decision != nil && !decision.AllowNextStage {
 		googleSecurityAuditError(c, decision)
 		return
 	}
@@ -397,7 +401,11 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 	}
 
 	// 余额模式在途预留：防止并发请求在预检时看到同一份余额而集体透支。
-	inflightRelease, err := reserveInflightBalance(c, h.billingCacheService, h.gatewayService, apiKey, subscription, tokenInflightEstimate(modelName, body))
+	inflightEstimate := tokenInflightEstimate(modelName, body)
+	if action == "embedContent" || action == "batchEmbedContents" {
+		inflightEstimate = service.InflightEstimateRequest{Model: modelName, BodyBytes: len(body), MaxTokens: 1, Kind: service.InflightEstimateToken}
+	}
+	inflightRelease, err := reserveInflightBalance(c, h.billingCacheService, h.gatewayService, apiKey, subscription, inflightEstimate)
 	if err != nil {
 		reqLog.Info("gemini.inflight_reservation_rejected", zap.Error(err))
 		status, code, message, retryAfter := billingErrorDetails(err)

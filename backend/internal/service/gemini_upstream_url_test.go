@@ -60,3 +60,11 @@ func TestBuildGeminiAIStudioModelActionURLRejectsNonConformingModel(t *testing.T
 	_, err = buildGeminiAIStudioModelActionURL("", "gemini-2.5-pro", "generateContent", false)
 	require.Error(t, err)
 }
+
+func TestBuildGeminiAIStudioEmbeddingActionURLs(t *testing.T) {
+	for _, action := range []string{"embedContent", "batchEmbedContents"} {
+		got, err := buildGeminiAIStudioModelActionURL("https://aistudio.example", "gemini-embedding-2", action, false)
+		require.NoError(t, err)
+		require.Equal(t, "https://aistudio.example/v1beta/models/gemini-embedding-2:"+action, got)
+	}
+}
