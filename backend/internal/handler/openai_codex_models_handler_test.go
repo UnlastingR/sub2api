@@ -391,7 +391,7 @@ func TestCodexModelsUnmappedParentAndSparkShadowHonorCustomListAndETag(t *testin
 	require.Contains(t, slugs, "gpt-5.6-sol")
 	require.Contains(t, slugs, sparkModel)
 	require.NotContains(t, slugs, "gpt-image-2")
-	require.NotContains(t, slugs, "codex-auto-review")
+	require.Contains(t, slugs, "codex-auto-review")
 	firstETag := first.Header().Get("ETag")
 	require.NotEmpty(t, firstETag)
 
@@ -1023,7 +1023,7 @@ func TestCodexModelsDiscoveryProjectsWildcardMappingWithoutAllowlist(t *testing.
 			}
 			first := performCodexModelsRequestForGroup(t, handler, group, "")
 			require.Equal(t, http.StatusOK, first.Code, first.Body.String())
-			require.Equal(t, []string{"gpt-5.4"}, codexHandlerManifestSlugs(t, first))
+			require.Equal(t, []string{"gpt-5.4", "codex-auto-review"}, codexHandlerManifestSlugs(t, first))
 			require.NotEmpty(t, first.Header().Get("ETag"))
 			second := performCodexModelsRequestForGroup(t, handler, group, first.Header().Get("ETag"))
 			require.Equal(t, http.StatusNotModified, second.Code)

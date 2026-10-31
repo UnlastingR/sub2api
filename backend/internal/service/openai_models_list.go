@@ -208,7 +208,7 @@ func projectAccountModelAliases(body []byte, account *Account, group *Group, cod
 			if isCodexDedicatedMediaModel(id) {
 				continue
 			}
-			if strings.HasPrefix(id, codexAutoModelPrefix) && len(FilterCodexModelIDsForGroup([]string{id}, group)) == 0 {
+			if strings.HasPrefix(id, codexAutoModelPrefix) && id != codexAutoReviewModel && len(FilterCodexModelIDsForGroup([]string{id}, group)) == 0 {
 				continue
 			}
 		}
@@ -237,6 +237,13 @@ func projectAccountModelAliases(body []byte, account *Account, group *Group, cod
 			continue
 		}
 		target, matched := account.ResolveMappedModel(id)
+		// A model mapping may list only user-facing aliases. Preserve an
+		// upstream-advertised Auto Review capability independently, while
+		// retaining explicit group allowlist restrictions.
+		if codex && id == codexAutoReviewModel && !matched &&
+			(!group.ModelAllowlistEnabled() || group.ModelAllowlist.Allows(id)) {
+			target, matched = id, true
+		}
 		raw, available := byID[strings.TrimSpace(target)]
 		if !matched || !available {
 			continue
