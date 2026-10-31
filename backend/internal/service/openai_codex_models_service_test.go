@@ -1266,15 +1266,26 @@ func TestBuildGroupConfiguredCodexModelsManifestUsesAdministratorConfiguration(t
 	require.NoError(t, err)
 	require.True(t, configured)
 	models := decodeCodexManifestModels(t, manifest.Body)
-	require.Equal(t, "glm-5.3", models[0]["slug"])
+	var glmModel map[string]any
+	var reviewModel map[string]any
+	for _, model := range models {
+		switch model["slug"] {
+		case "glm-5.3":
+			glmModel = model
+		case "codex-auto-review":
+			reviewModel = model
+		}
+	}
+	require.NotNil(t, glmModel)
+	require.NotNil(t, reviewModel)
+	require.Equal(t, "hide", reviewModel["visibility"])
 	require.Contains(t, codexManifestModelSlugs(t, manifest.Body), "gpt-5.6-sol")
 	require.NotContains(t, codexManifestModelSlugs(t, manifest.Body), "gpt-image-2")
-	require.NotContains(t, codexManifestModelSlugs(t, manifest.Body), "codex-auto-review")
-	require.Equal(t, "GLM 5.3", models[0]["display_name"])
-	require.Equal(t, []string{"low", "medium", "high"}, effortsFromManifestModel(t, models[0]))
-	require.Equal(t, "medium", models[0]["default_reasoning_level"])
-	require.Equal(t, []any{"text"}, models[0]["input_modalities"])
-	require.EqualValues(t, 1_000_000, models[0]["context_window"])
+	require.Equal(t, "GLM 5.3", glmModel["display_name"])
+	require.Equal(t, []string{"low", "medium", "high"}, effortsFromManifestModel(t, glmModel))
+	require.Equal(t, "medium", glmModel["default_reasoning_level"])
+	require.Equal(t, []any{"text"}, glmModel["input_modalities"])
+	require.EqualValues(t, 1_000_000, glmModel["context_window"])
 	require.Equal(t, codexModelsManifestBodyETag(manifest.Body), manifest.ETag)
 
 	notModified, configured, err := svc.BuildGroupConfiguredCodexModelsManifest(
