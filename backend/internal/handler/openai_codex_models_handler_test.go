@@ -391,7 +391,7 @@ func TestCodexModelsUnmappedParentAndSparkShadowHonorCustomListAndETag(t *testin
 	require.Contains(t, slugs, "gpt-5.6-sol")
 	require.Contains(t, slugs, sparkModel)
 	require.NotContains(t, slugs, "gpt-image-2")
-	require.Contains(t, slugs, "codex-auto-review")
+	require.NotContains(t, slugs, "codex-auto-review")
 	firstETag := first.Header().Get("ETag")
 	require.NotEmpty(t, firstETag)
 
