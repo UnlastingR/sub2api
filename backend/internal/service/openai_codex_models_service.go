@@ -451,6 +451,14 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 		ExperimentalSupportedTools:        []string{},
 		InputModalities:                   []string{"text"},
 	}
+	if modelID == codexAutoReviewModel {
+		lowReasoningLevel := "low"
+		descriptor.Visibility = "hide"
+		descriptor.DefaultReasoningLevel = &lowReasoningLevel
+		descriptor.SupportedReasoningLevels = []configuredCodexReasoningLevel{
+			{Effort: "low", Description: configuredCodexReasoningLevelDescription("low")},
+		}
+	}
 
 	if isDeepSeekCodexModel(modelID) {
 		defaultReasoningLevel := "high"
@@ -1416,11 +1424,18 @@ func mergeConfiguredCodexModelsManifest(
 		if strings.HasPrefix(descriptor.Slug, codexAutoModelPrefix) {
 			_, explicitlyEnabled := selected[descriptor.Slug]
 			explicitlyEnabled = filterBySelection && explicitlyEnabled
-			if !explicitlyEnabled {
+			// Auto Review is an internal Codex capability. Keep it in the
+			// manifest, but hidden from the ordinary model picker. Other
+			// codex-auto-* modes still require explicit selection.
+			if !explicitlyEnabled && (descriptor.Slug != codexAutoReviewModel || filterBySelection) {
 				changed = true
 				continue
 			}
-			visibleModel, visibilityChanged, err := codexModelWithVisibility(rawModel, "list")
+			visibility := "hide"
+			if explicitlyEnabled {
+				visibility = "list"
+			}
+			visibleModel, visibilityChanged, err := codexModelWithVisibility(rawModel, visibility)
 			if err != nil {
 				return nil, false, err
 			}

@@ -186,8 +186,18 @@ func TestCodexModelsAppliesLocalFiltersBeforeClientETag(t *testing.T) {
 	if second.Code != http.StatusOK {
 		t.Fatalf("second status: got %d, want %d; body=%s", second.Code, http.StatusOK, second.Body.String())
 	}
-	if body := second.Body.String(); strings.Contains(body, "codex-auto-review") || !strings.Contains(body, "gpt-5.6") {
-		t.Fatalf("second body was not the filtered manifest: %s", body)
+	require.ElementsMatch(t, []string{"codex-auto-review", "gpt-5.6"}, codexHandlerManifestSlugs(t, second))
+	var secondManifest struct {
+		Models []struct {
+			Slug       string `json:"slug"`
+			Visibility string `json:"visibility"`
+		} `json:"models"`
+	}
+	require.NoError(t, json.Unmarshal(second.Body.Bytes(), &secondManifest))
+	for _, model := range secondManifest.Models {
+		if model.Slug == "codex-auto-review" {
+			require.Equal(t, "hide", model.Visibility)
+		}
 	}
 	if newETag := second.Header().Get("ETag"); newETag == "" || newETag == oldETag {
 		t.Fatalf("second ETag: got %q, want a new final-body ETag", newETag)
@@ -391,7 +401,7 @@ func TestCodexModelsUnmappedParentAndSparkShadowHonorCustomListAndETag(t *testin
 	require.Contains(t, slugs, "gpt-5.6-sol")
 	require.Contains(t, slugs, sparkModel)
 	require.NotContains(t, slugs, "gpt-image-2")
-	require.NotContains(t, slugs, "codex-auto-review")
+	require.Contains(t, slugs, "codex-auto-review")
 	firstETag := first.Header().Get("ETag")
 	require.NotEmpty(t, firstETag)
 
@@ -1023,7 +1033,7 @@ func TestCodexModelsDiscoveryProjectsWildcardMappingWithoutAllowlist(t *testing.
 			}
 			first := performCodexModelsRequestForGroup(t, handler, group, "")
 			require.Equal(t, http.StatusOK, first.Code, first.Body.String())
-			require.Equal(t, []string{"gpt-5.4"}, codexHandlerManifestSlugs(t, first))
+			require.Equal(t, []string{"gpt-5.4", "codex-auto-review"}, codexHandlerManifestSlugs(t, first))
 			require.NotEmpty(t, first.Header().Get("ETag"))
 			second := performCodexModelsRequestForGroup(t, handler, group, first.Header().Get("ETag"))
 			require.Equal(t, http.StatusNotModified, second.Code)

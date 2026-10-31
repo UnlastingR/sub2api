@@ -1266,15 +1266,26 @@ func TestBuildGroupConfiguredCodexModelsManifestUsesAdministratorConfiguration(t
 	require.NoError(t, err)
 	require.True(t, configured)
 	models := decodeCodexManifestModels(t, manifest.Body)
-	require.Equal(t, "glm-5.3", models[0]["slug"])
+	var glmModel map[string]any
+	var reviewModel map[string]any
+	for _, model := range models {
+		switch model["slug"] {
+		case "glm-5.3":
+			glmModel = model
+		case "codex-auto-review":
+			reviewModel = model
+		}
+	}
+	require.NotNil(t, glmModel)
+	require.NotNil(t, reviewModel)
+	require.Equal(t, "hide", reviewModel["visibility"])
 	require.Contains(t, codexManifestModelSlugs(t, manifest.Body), "gpt-5.6-sol")
 	require.NotContains(t, codexManifestModelSlugs(t, manifest.Body), "gpt-image-2")
-	require.NotContains(t, codexManifestModelSlugs(t, manifest.Body), "codex-auto-review")
-	require.Equal(t, "GLM 5.3", models[0]["display_name"])
-	require.Equal(t, []string{"low", "medium", "high"}, effortsFromManifestModel(t, models[0]))
-	require.Equal(t, "medium", models[0]["default_reasoning_level"])
-	require.Equal(t, []any{"text"}, models[0]["input_modalities"])
-	require.EqualValues(t, 1_000_000, models[0]["context_window"])
+	require.Equal(t, "GLM 5.3", glmModel["display_name"])
+	require.Equal(t, []string{"low", "medium", "high"}, effortsFromManifestModel(t, glmModel))
+	require.Equal(t, "medium", glmModel["default_reasoning_level"])
+	require.Equal(t, []any{"text"}, glmModel["input_modalities"])
+	require.EqualValues(t, 1_000_000, glmModel["context_window"])
 	require.Equal(t, codexModelsManifestBodyETag(manifest.Body), manifest.ETag)
 
 	notModified, configured, err := svc.BuildGroupConfiguredCodexModelsManifest(
@@ -1435,7 +1446,7 @@ func TestBuildGroupConfiguredCodexModelsManifestFallsThroughWithoutConfiguration
 	require.Nil(t, manifest)
 }
 
-func TestMergeGroupConfiguredCodexModelsFiltersAutoReviewByDefault(t *testing.T) {
+func TestMergeGroupConfiguredCodexModelsKeepsAutoReviewHiddenByDefault(t *testing.T) {
 	t.Parallel()
 
 	const groupID int64 = 74
@@ -1451,8 +1462,10 @@ func TestMergeGroupConfiguredCodexModelsFiltersAutoReviewByDefault(t *testing.T)
 		"",
 	))
 	models := decodeCodexManifestModels(t, manifest.Body)
-	require.Len(t, models, 1)
-	require.Equal(t, "gpt-5.6", models[0]["slug"])
+	require.Len(t, models, 2)
+	require.Equal(t, "codex-auto-review", models[0]["slug"])
+	require.Equal(t, "hide", models[0]["visibility"])
+	require.Equal(t, "gpt-5.6", models[1]["slug"])
 	require.Equal(t, codexModelsManifestBodyETag(manifest.Body), manifest.ETag)
 }
 
@@ -1485,7 +1498,44 @@ func TestMergeGroupConfiguredCodexModelsFiltersAccountMappedAutoReviewByDefault(
 		manifest,
 		"",
 	))
+	require.Equal(t, []string{"codex-auto-review", "gpt-5.6"}, codexManifestModelSlugs(t, manifest.Body))
+	require.Equal(t, "hide", decodeCodexManifestModels(t, manifest.Body)[0]["visibility"])
+	require.Equal(t, map[string]any{"auto_review": map[string]any{"enabled": true}}, decodeCodexManifestModels(t, manifest.Body)[0]["model_messages"])
+}
+
+func TestMergeGroupConfiguredCodexModelsKeepsAutoReviewScopedByAllowlist(t *testing.T) {
+	t.Parallel()
+
+	svc := &OpenAIGatewayService{accountRepo: codexModelsVisibilityAccountRepo{}}
+	manifest := &OpenAIModelsResponse{
+		Body: []byte(`{"models":[{"slug":"codex-auto-review","visibility":"hide"},{"slug":"gpt-5.6","visibility":"list"}]}`),
+	}
+	group := &Group{ID: 75, Platform: PlatformOpenAI, ModelAllowlist: GroupModelAllowlist{
+		Enabled: true, Models: []string{"gpt-5.6"},
+	}}
+	require.NoError(t, svc.MergeGroupConfiguredCodexModels(context.Background(), group, manifest, ""))
 	require.Equal(t, []string{"gpt-5.6"}, codexManifestModelSlugs(t, manifest.Body))
+}
+
+func TestProjectAccountModelAliasesPreservesInternalAutoReview(t *testing.T) {
+	t.Parallel()
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{
+		"model_mapping": map[string]any{"gpt-5.6": "gpt-5.6"},
+	}}
+	body := []byte(`{"models":[{"slug":"codex-auto-review","visibility":"hide","model_messages":{"auto_review":{"enabled":true}}},{"slug":"gpt-5.6","visibility":"list"}]}`)
+	projected, err := projectAccountModelAliases(body, account, &Group{Platform: PlatformOpenAI}, true)
+	require.NoError(t, err)
+	models := decodeCodexManifestModels(t, projected)
+	require.Equal(t, []string{"codex-auto-review", "gpt-5.6"}, codexManifestModelSlugs(t, projected))
+	require.Equal(t, "hide", models[0]["visibility"])
+	require.Equal(t, map[string]any{"auto_review": map[string]any{"enabled": true}}, models[0]["model_messages"])
+
+	group := &Group{Platform: PlatformOpenAI, ModelAllowlist: GroupModelAllowlist{
+		Enabled: true, Models: []string{"gpt-5.6"},
+	}}
+	projected, err = projectAccountModelAliases(body, account, group, true)
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-5.6"}, codexManifestModelSlugs(t, projected))
 }
 
 // Scenario: 启用的分组自定义列表允许 Auto Review。
