@@ -14,6 +14,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -144,6 +145,21 @@ func TestVertexGeminiOpenAIEmbeddingsBatch(t *testing.T) {
 	require.Equal(t, "AACAPgAAAL8=", gjson.Get(rec.Body.String(), "data.0.embedding").String())
 	require.Equal(t, int64(1), gjson.Get(rec.Body.String(), "data.1.index").Int())
 	require.Equal(t, int64(9), gjson.Get(rec.Body.String(), "usage.prompt_tokens").Int())
+}
+
+func TestVertexGeminiEmbeddingChannelMappingAcceptsRequestedModel(t *testing.T) {
+	body := `{"requests":[{"model":"models/channel-alias","content":{"parts":[{"text":"hello"}]}}]}`
+	svc, upstream := vertexEmbeddingTestService(vertexEmbeddingTestResponse{status: http.StatusOK, body: `{"embedding":{"values":[1]},"usageMetadata":{"promptTokenCount":2}}`})
+	c, rec := embeddingTestContext(body)
+	c.Params = append(c.Params, gin.Param{Key: "modelAction", Value: "/channel-alias:batchEmbedContents"})
+
+	result, err := svc.ForwardNative(context.Background(), c, geminiVertexAPIKeyTestAccount(""), "gemini-embedding-2", "batchEmbedContents", false, []byte(body))
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Usage.InputTokens)
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "/v1/publishers/google/models/gemini-embedding-2:embedContent", upstream.requests[0].URL.Path)
+	require.False(t, gjson.Get(upstream.bodies[0], "model").Exists())
+	require.Equal(t, int64(1), gjson.Get(rec.Body.String(), "embeddings.0.values.0").Int())
 }
 
 func TestVertexGeminiEmbeddingBatchValidatesBeforeSending(t *testing.T) {

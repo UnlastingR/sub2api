@@ -1138,8 +1138,18 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		if stream {
 			return nil, s.writeGoogleError(c, http.StatusBadRequest, "Embeddings do not support streaming")
 		}
+		// A channel may already have mapped originalModel while the native body
+		// still names the model from the incoming URL.
+		requestedModel := strings.TrimPrefix(c.Param("modelAction"), "/")
+		if model, _, ok := strings.Cut(requestedModel, ":"); ok {
+			requestedModel = model
+		} else if model, _, ok := strings.Cut(requestedModel, "/"); ok {
+			requestedModel = model
+		} else {
+			requestedModel = ""
+		}
 		var err error
-		vertexRequests, err = vertexGeminiEmbeddingRequests(body, action, originalModel, publicModel, mappedModel)
+		vertexRequests, err = vertexGeminiEmbeddingRequests(body, action, originalModel, publicModel, mappedModel, requestedModel)
 		if err != nil {
 			return nil, s.writeGoogleError(c, http.StatusBadRequest, err.Error())
 		}
