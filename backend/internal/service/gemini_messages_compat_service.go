@@ -1132,7 +1132,19 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	}
 
 	publicModel, _ := RequestedPublicModelFromContext(ctx)
-	if (action == "embedContent" || action == "batchEmbedContents") &&
+	vertexEmbedding := account.Type == AccountTypeServiceAccount && (action == "embedContent" || action == "batchEmbedContents")
+	var vertexRequests [][]byte
+	if vertexEmbedding {
+		if stream {
+			return nil, s.writeGoogleError(c, http.StatusBadRequest, "Embeddings do not support streaming")
+		}
+		var err error
+		vertexRequests, err = vertexGeminiEmbeddingRequests(body, action, originalModel, publicModel, mappedModel)
+		if err != nil {
+			return nil, s.writeGoogleError(c, http.StatusBadRequest, err.Error())
+		}
+	}
+	if !vertexEmbedding && (action == "embedContent" || action == "batchEmbedContents") &&
 		(mappedModel != originalModel || (publicModel != "" && strings.TrimPrefix(publicModel, "models/") != mappedModel)) {
 		var err error
 		body, err = mapGeminiEmbeddingRequestModels(body, mappedModel, action)
@@ -1148,6 +1160,15 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 	useUpstreamStream := stream
 	upstreamAction := action
+	upstreamBody := body
+	var vertexBatch *vertexGeminiEmbeddingBatch
+	if vertexEmbedding {
+		upstreamAction = "embedContent"
+		upstreamBody = vertexRequests[0]
+		if action == "batchEmbedContents" {
+			vertexBatch = &vertexGeminiEmbeddingBatch{requests: vertexRequests}
+		}
+	}
 	if account.Type == AccountTypeOAuth && !stream && action == "generateContent" && strings.TrimSpace(account.GetCredential("project_id")) != "" {
 		// Code Assist's non-streaming generateContent may return no content; use streaming upstream and aggregate.
 		useUpstreamStream = true
@@ -1263,7 +1284,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				return nil, "", err
 			}
 
-			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
+			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(upstreamBody))
 			if err != nil {
 				return nil, "", err
 			}
@@ -1290,6 +1311,9 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return nil, err
 			}
+			if vertexBatch != nil && len(vertexBatch.embeddings) > 0 {
+				return nil, s.writeGoogleError(c, http.StatusBadGateway, "Upstream embedding batch failed after partial completion")
+			}
 			if failoverErr := s.handleVertexServiceAccountNotFound(ctx, c, account, err); failoverErr != nil {
 				return nil, failoverErr
 			}
@@ -1304,6 +1328,10 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
 			transportErr := s.handleUpstreamTransportError(ctx, c, account, err)
+			if vertexBatch != nil && len(vertexBatch.embeddings) > 0 &&
+				!errors.Is(transportErr, context.Canceled) && !errors.Is(transportErr, context.DeadlineExceeded) {
+				return nil, s.writeGoogleError(c, http.StatusBadGateway, "Upstream embedding batch failed after partial completion")
+			}
 			// countTokens 不因上游链路故障而失败：本地估算兜底，不换号。
 			var failoverErr *UpstreamFailoverError
 			if action == "countTokens" && errors.As(transportErr, &failoverErr) {
@@ -1337,6 +1365,36 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		checkedPolicy = checked
 		if checked != nil && *checked != ErrorPolicyNone {
 			break
+		}
+
+		if vertexBatch != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			responseBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
+			_ = resp.Body.Close()
+			if err != nil {
+				if errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
+					return nil, err
+				}
+				return nil, s.writeGoogleError(c, http.StatusBadGateway, "Failed to read upstream embedding response")
+			}
+			if err := vertexBatch.addResponse(responseBody, resolveUpstreamResponseReadLimit(s.cfg)); err != nil {
+				if errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
+					return nil, s.writeGoogleError(c, http.StatusBadGateway, "Upstream embedding batch response too large")
+				}
+				return nil, s.writeGoogleError(c, http.StatusBadGateway, "Invalid upstream embedding response")
+			}
+			if len(vertexBatch.embeddings) < len(vertexBatch.requests) {
+				upstreamBody = vertexBatch.requests[len(vertexBatch.embeddings)]
+				attempt = 0
+				continue
+			}
+			merged, err := vertexBatch.response()
+			if err != nil || int64(len(merged)) > resolveUpstreamResponseReadLimit(s.cfg) {
+				return nil, s.writeGoogleError(c, http.StatusBadGateway, "Invalid upstream embedding batch response")
+			}
+			headers := resp.Header.Clone()
+			headers.Del("Content-Length")
+			headers.Del("Content-Encoding")
+			resp = &http.Response{StatusCode: http.StatusOK, Header: headers, Body: io.NopCloser(bytes.NewReader(merged))}
 		}
 
 		if resp.StatusCode >= 400 && s.shouldRetryGeminiUpstreamError(account, resp.StatusCode) {
@@ -1424,6 +1482,17 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
+		// Do not fail over the entire batch after Vertex has already billed items.
+		if vertexBatch != nil && len(vertexBatch.embeddings) > 0 {
+			policy := ErrorPolicyNone
+			if s.rateLimitService != nil {
+				policy = s.finalErrorPolicy(ctx, account, resp.StatusCode, respBody, mappedModel, checkedPolicy)
+			}
+			if policy == ErrorPolicyNone || policy == ErrorPolicyMatched {
+				s.handleGeminiUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+			}
+			return nil, s.writeGeminiNativeUpstreamError(c, account, resp, respBody, requestID, isOAuth)
+		}
 		// 引用缓存不存在是请求问题：统一返回 403，不改账号状态、不换号。
 		if isGeminiCachedContentNotFound(resp.StatusCode, respBody) {
 			return nil, s.writeGeminiCachedContentNotFound(c, account, resp, respBody, requestID, isOAuth)

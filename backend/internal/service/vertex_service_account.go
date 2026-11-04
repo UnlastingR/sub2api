@@ -355,7 +355,7 @@ func buildVertexGeminiExpressURL(model, action string, stream bool) (string, err
 
 func validateVertexGeminiAction(action string) error {
 	switch action {
-	case "generateContent", "streamGenerateContent", "countTokens":
+	case "generateContent", "streamGenerateContent", "countTokens", "embedContent":
 		return nil
 	default:
 		return fmt.Errorf("unsupported vertex gemini action: %s", action)
