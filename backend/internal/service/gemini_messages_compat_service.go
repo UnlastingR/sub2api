@@ -1311,10 +1311,11 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return nil, err
 			}
+			failoverErr := s.handleVertexServiceAccountNotFound(ctx, c, account, err)
 			if vertexBatch != nil && len(vertexBatch.embeddings) > 0 {
 				return nil, s.writeGoogleError(c, http.StatusBadGateway, "Upstream embedding batch failed after partial completion")
 			}
-			if failoverErr := s.handleVertexServiceAccountNotFound(ctx, c, account, err); failoverErr != nil {
+			if failoverErr != nil {
 				return nil, failoverErr
 			}
 			// Local build error: don't retry.

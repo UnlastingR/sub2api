@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -27,6 +28,23 @@ type vertexEmbeddingTestUpstream struct {
 	responses []vertexEmbeddingTestResponse
 	requests  []*http.Request
 	bodies    []string
+}
+
+type vertexEmbeddingExpiringTokenCache struct {
+	fakeGeminiTokenCache
+	reads int
+}
+
+func (c *vertexEmbeddingExpiringTokenCache) GetAccessToken(context.Context, string) (string, error) {
+	c.reads++
+	if c.reads == 1 {
+		return "cached-vertex-token", nil
+	}
+	return "", errors.New("expired")
+}
+
+func (c *vertexEmbeddingExpiringTokenCache) AcquireRefreshLock(context.Context, string, time.Duration) (bool, error) {
+	return true, nil
 }
 
 func (s *vertexEmbeddingTestUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
@@ -196,4 +214,23 @@ func TestVertexGeminiEmbeddingPartialFailureDoesNotFailOver(t *testing.T) {
 			require.Equal(t, tc.status, rec.Code)
 		})
 	}
+}
+
+func TestVertexGeminiEmbeddingPartialAuthFailureDisablesAccountWithoutFailover(t *testing.T) {
+	useVertexTokenEndpoint(t, http.StatusBadRequest, vertexAccountNotFoundTokenBody)
+	body := `{"requests":[{"content":{"parts":[{"text":"first"}]}},{"content":{"parts":[{"text":"second"}]}}]}`
+	svc, upstream := vertexEmbeddingTestService(vertexEmbeddingTestResponse{status: http.StatusOK, body: `{"embedding":{"values":[1]},"usageMetadata":{"promptTokenCount":2}}`})
+	repo := &errorPolicyRepoStub{}
+	svc.accountRepo = repo
+	svc.tokenProvider = NewGeminiTokenProvider(repo, &vertexEmbeddingExpiringTokenCache{}, nil)
+	c, rec := embeddingTestContext(body)
+
+	result, err := svc.ForwardNative(context.Background(), c, newVertexTokenTestAccount(t), "gemini-embedding-2", "batchEmbedContents", false, []byte(body))
+	require.Error(t, err)
+	require.Nil(t, result)
+	var failover *UpstreamFailoverError
+	require.False(t, errors.As(err, &failover))
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, 1, repo.setErrCalls)
+	require.Equal(t, http.StatusBadGateway, rec.Code)
 }
