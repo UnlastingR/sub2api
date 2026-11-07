@@ -10,7 +10,8 @@ overrides:
   postcss@<8.5.18: '>=8.5.18'
   dompurify@<3.4.17: '>=3.4.17'
   source-map-js@<1.2.2: '>=1.2.2'
-  follow-redirects@<1.16.1: '>=1.16.1'
+  follow-redirects@<1.16.2: '>=1.16.2'
+  decode-uri-component@<0.5.1: '>=0.5.1'
 
 importers:
 
@@ -65,7 +66,7 @@ importers:
         specifier: ^0.6.1
         version: 0.6.1(@types/sortablejs@1.15.9)
       vue-i18n:
-        specifier: ^11.4.14
+        specifier: ^11.4.16
         version: 11.4.16(vue@3.5.43(typescript@5.6.3))
       vue-router:
         specifier: ^4.2.5
@@ -75,8 +76,8 @@ importers:
         version: 0.18.5
     devDependencies:
       '@intlify/message-compiler':
-        specifier: 11.4.14
-        version: 11.4.14
+        specifier: 11.4.16
+        version: 11.4.16
       '@types/dompurify':
         specifier: ^3.0.5
         version: 3.2.0
@@ -634,16 +635,8 @@ packages:
     resolution: {integrity: sha512-Bl7arICsKgwcSEQuZJun3swenN4jwSpg35lCpijFznYbW9GvkfH4wLxcI5+gz7d/EHqu66UT9CZDIdnQdgMAGg==}
     engines: {node: '>= 22'}
 
-  '@intlify/message-compiler@11.4.14':
-    resolution: {integrity: sha512-y79GatHfMhN672Vooxw0v6mgX/vclFHggO1ENL6aH/QubLXiV529WXu/+FhVUbYF+HLTeDDkQpmnpfvSJddBCg==}
-    engines: {node: '>= 22'}
-
   '@intlify/message-compiler@11.4.16':
     resolution: {integrity: sha512-p4lDWmBAsi3ja+PuEfPRavYyvqkYn/Upxz7UpnyI9LgIIy8XawcGIDzN+k99Z+99etO3HmDXGeTxnJIJGgSZ+g==}
-    engines: {node: '>= 22'}
-
-  '@intlify/shared@11.4.14':
-    resolution: {integrity: sha512-f8zSlPs4+Yd9za3CPQfW9OHxAJBOeRQzB/hhOhkbGA7hlqWk0W0bUtSV/LmyrGNwdl8JriBnFtJqZyF140bjGg==}
     engines: {node: '>= 22'}
 
   '@intlify/shared@11.4.16':
@@ -2308,8 +2301,8 @@ packages:
   decode-named-character-reference@1.3.0:
     resolution: {integrity: sha512-GtpQYB283KrPp6nRw50q3U9/VfOutZOe103qlN7BPP6Ad27xYnOIWv4lPzo8HCAL+mMZofJ9KEy30fq6MfaK6Q==}
 
-  decode-uri-component@0.4.1:
-    resolution: {integrity: sha512-+8VxcR21HhTy8nOt6jf20w0c9CADrw1O8d+VZ/YzzCt4bJ3uBjw+D1q2osAB8RnpwwaeYBxy0HyKQxD5JBMuuQ==}
+  decode-uri-component@0.5.1:
+    resolution: {integrity: sha512-vWHQkXgg2cE3BB4rR0c+PYw9BCQzLoNIRMI7AunIkZst74tw/vpPp7VLoYtsR/cy1f55g3XDWUslfeCZjiZJyA==}
     engines: {node: '>=14.16'}
 
   deep-eql@5.0.2:
@@ -2584,8 +2577,8 @@ packages:
   flatted@3.3.3:
     resolution: {integrity: sha512-GX+ysw4PBCz0PzosHDepZGANEuFCMLrnRTiEy9McGjmkCQYwRq4A/X786G/fjM/+OjsWSU1ZrY5qyARZmO/uwg==}
 
-  follow-redirects@1.16.1:
-    resolution: {integrity: sha512-FNvFGzoMLWmE6Yj9spb/zjd7yiNCHiAW9/Tg9CXrQ8wuu32HtlJOwWO11OJafl5FfY3DxTdQ0vj42zU1kvv5jg==}
+  follow-redirects@1.16.2:
+    resolution: {integrity: sha512-/kVP2U8z596Ia0gwFrwyIeo74ta5aVmSeU1FfAUMAmcEP5EP7zydmag3SLiN64NaRKef3lxsq7i/g7ltJQDGow==}
     engines: {node: '>=4.0'}
     peerDependencies:
       debug: '*'
@@ -5065,17 +5058,10 @@ snapshots:
       '@intlify/core-base': 11.4.16
       '@intlify/shared': 11.4.16
 
-  '@intlify/message-compiler@11.4.14':
-    dependencies:
-      '@intlify/shared': 11.4.14
-      source-map-js: 1.2.2
-
   '@intlify/message-compiler@11.4.16':
     dependencies:
       '@intlify/shared': 11.4.16
       source-map-js: 1.2.2
-
-  '@intlify/shared@11.4.14': {}
 
   '@intlify/shared@11.4.16': {}
 
@@ -6588,7 +6574,7 @@ snapshots:
 
   axios@1.20.0:
     dependencies:
-      follow-redirects: 1.16.1
+      follow-redirects: 1.16.2
       form-data: 4.0.6
       https-proxy-agent: 5.0.1
       proxy-from-env: 2.1.0
@@ -7004,7 +6990,7 @@ snapshots:
     dependencies:
       character-entities: 2.0.2
 
-  decode-uri-component@0.4.1: {}
+  decode-uri-component@0.5.1: {}
 
   deep-eql@5.0.2: {}
 
@@ -7330,7 +7316,7 @@ snapshots:
 
   flatted@3.3.3: {}
 
-  follow-redirects@1.16.1: {}
+  follow-redirects@1.16.2: {}
 
   for-in@1.0.2: {}
 
@@ -8740,7 +8726,7 @@ snapshots:
 
   query-string@9.3.1:
     dependencies:
-      decode-uri-component: 0.4.1
+      decode-uri-component: 0.5.1
       filter-obj: 5.1.0
       split-on-first: 3.0.0
 
