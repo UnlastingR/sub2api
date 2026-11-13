@@ -628,6 +628,7 @@ type ForwardResult struct {
 	// UpstreamResponseServiceTier is the tier the upstream reports having used
 	// (Anthropic usage.speed: "fast" / "standard"); "" when not declared.
 	UpstreamResponseServiceTier string
+	InteractionTerminal         bool
 	Stream                      bool
 	Duration                    time.Duration
 	FirstTokenMs                *int // 首字时间（流式请求）
@@ -1745,4 +1746,12 @@ func (s *GatewayService) debugLogGatewaySnapshot(tag string, headers http.Header
 
 	// 写入文件（调试用，并发写入可能交错但不影响可读性）
 	_, _ = f.WriteString(buf.String())
+}
+
+// GetUserSubscriptionByID retrieves a user subscription by ID for deferred usage attribution.
+func (s *GatewayService) GetUserSubscriptionByID(ctx context.Context, subscriptionID int64) (*UserSubscription, error) {
+	if s == nil || s.userSubRepo == nil || subscriptionID <= 0 {
+		return nil, nil
+	}
+	return s.userSubRepo.GetByID(ctx, subscriptionID)
 }

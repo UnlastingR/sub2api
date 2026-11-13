@@ -107,7 +107,7 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 		return
 	}
 
-	res, err := h.geminiCompatService.ForwardListModels(c.Request.Context(), account)
+	res, err := h.geminiCompatService.ForwardListModelsWithQuery(c.Request.Context(), account, c.Request.URL.Query())
 	if err != nil {
 		googleError(c, http.StatusBadGateway, err.Error())
 		return
@@ -116,7 +116,7 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 		c.JSON(http.StatusOK, gemini.ModelsListResponse{Models: filterGeminiModels(mergeGeminiModelLists(gemini.DefaultModels(), agModels))})
 		return
 	}
-	if res.StatusCode == http.StatusOK && len(agModels) > 0 {
+	if strings.TrimSpace(c.Query("pageToken")) == "" && res.StatusCode == http.StatusOK && len(agModels) > 0 {
 		if merged, ok := appendUpstreamGeminiModels(res.Body, agModels); ok {
 			res.Body = merged
 		}

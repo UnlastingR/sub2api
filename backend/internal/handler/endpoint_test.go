@@ -39,6 +39,10 @@ func TestNormalizeInboundEndpoint(t *testing.T) {
 		{"/v1beta/models", EndpointGeminiModels},
 		{"/v1beta/cachedContents", EndpointGeminiCachedContents},
 		{"/v1beta/cachedContents/gfo2i2haszm3wbwiyivyok5cyddubfwsr77efg7h", EndpointGeminiCachedContents},
+		{"/v1beta/interactions", EndpointGeminiInteractions},
+		{"/v1beta/interactions/v1_abc", EndpointGeminiInteractions},
+		{"/v1beta/interactions/v1_abc/cancel", EndpointGeminiInteractions},
+		{"/v1beta/decisions", EndpointGeminiDecisions},
 
 		// Prefixed paths (antigravity, openai) — root Responses.
 		{"/antigravity/v1/messages", EndpointMessages},
@@ -105,6 +109,8 @@ func TestDeriveUpstreamEndpoint(t *testing.T) {
 		// Gemini.
 		{"gemini models", EndpointGeminiModels, "/v1beta/models/gemini:gen", service.PlatformGemini, EndpointGeminiModels},
 		{"gemini cached contents", EndpointGeminiCachedContents, "/v1beta/cachedContents/abc", service.PlatformGemini, EndpointGeminiCachedContents},
+		{"gemini interactions", EndpointGeminiInteractions, "/v1beta/interactions", service.PlatformGemini, EndpointGeminiInteractions},
+		{"gemini decisions", EndpointGeminiDecisions, "/v1beta/decisions", service.PlatformGemini, EndpointGeminiDecisions},
 
 		// OpenAI — root Responses.
 		{"openai responses root", EndpointResponses, "/v1/responses", service.PlatformOpenAI, EndpointResponses},

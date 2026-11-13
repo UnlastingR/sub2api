@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -65,8 +66,10 @@ type GeminiMessagesCompatService struct {
 	rateLimitService          *RateLimitService
 	httpUpstream              HTTPUpstream
 	antigravityGatewayService *AntigravityGatewayService
-	cfg                       *config.Config
-	responseHeaderFilter      *responseheaders.CompiledHeaderFilter
+	cfg                         *config.Config
+	responseHeaderFilter        *responseheaders.CompiledHeaderFilter
+	geminiInteractionPendingMu  sync.Mutex
+	geminiInteractionPendingDue map[string]time.Time
 }
 
 func (s *GeminiMessagesCompatService) readUpstreamErrorBody(resp *http.Response) []byte {

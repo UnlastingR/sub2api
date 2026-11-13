@@ -39,11 +39,16 @@ func IsLiveRequestRoute(routePath string) bool {
 	return liveRequestRoutes[strings.TrimSpace(routePath)]
 }
 
+func isInteractionsRoute(routePath string) bool {
+	return strings.Contains(strings.TrimSpace(routePath), "/interactions")
+}
+
 // FromBodyCandidates 按入口返回所有可被下游解析器绑定的模型值：
-// Live 入口取 session 候选（为空回落顶层候选），其余入口取顶层候选
-// （为空回落 session 候选）。候选包含重复键、大小写变体的全部出现。
+// Live 入口取 session 候选（为空回落顶层候选），Interactions 入口同时收集
+// 顶层 model 与 agent 候选，其余入口取顶层候选（为空回落 session 候选）。
+// 候选包含重复键、大小写变体的全部出现。
 func FromBodyCandidates(routePath, contentType string, body []byte) []string {
-	var topLevel, session []string
+	var topLevel, agents, session []string
 	if isMultipartContentType(contentType) {
 		// 声明为 multipart 的请求体只做 multipart 解析——gjson 的部分扫描
 		// 会在 multipart 字节流里误匹配 session JSON 内的 model 字段。
@@ -52,6 +57,9 @@ func FromBodyCandidates(routePath, contentType string, body []byte) []string {
 		session = sessionModelCandidates(sessions)
 	} else {
 		topLevel = jsonModelCandidates(body)
+		if isInteractionsRoute(routePath) {
+			agents = jsonKeyCandidates(body, "agent")
+		}
 		session = jsonSessionModelCandidates(body)
 	}
 
@@ -60,6 +68,15 @@ func FromBodyCandidates(routePath, contentType string, body []byte) []string {
 			return session
 		}
 		return topLevel
+	}
+	if isInteractionsRoute(routePath) {
+		combined := make([]string, 0, len(topLevel)+len(agents))
+		combined = append(combined, topLevel...)
+		combined = append(combined, agents...)
+		if len(combined) > 0 {
+			return combined
+		}
+		return session
 	}
 	if len(topLevel) > 0 {
 		return topLevel
@@ -97,10 +114,14 @@ func JSONModelPath(body []byte) (string, string) {
 }
 
 // JSONModelPathForRoute 按入口返回合成路由改写应写入的模型路径：Live 入口
-// session.model 优先，其余入口顶层 model 优先。
+// session.model 优先，Interactions 入口依次检查 model / agent / session.model，
+// 其余入口顶层 model 优先。
 func JSONModelPathForRoute(routePath string, body []byte) (string, string) {
 	if IsLiveRequestRoute(routePath) {
 		return jsonModelWithPaths(body, []string{"session.model", "model"})
+	}
+	if isInteractionsRoute(routePath) {
+		return jsonModelWithPaths(body, []string{"model", "agent", "session.model"})
 	}
 	return jsonModelWithPaths(body, []string{"model", "session.model"})
 }
@@ -119,11 +140,15 @@ func jsonModelWithPaths(body []byte, paths []string) (string, string) {
 }
 
 // jsonModelCandidates 返回顶层所有键名大小写不敏感等于 "model" 的字符串值，
-// 按出现顺序保留重复（覆盖 gjson 首 matches 与 encoding/json 末值绑定两类解析器）。
+// 按出现顺序保留重复（覆盖 gjson 首匹配与 encoding/json 末值绑定两类解析器）。
 func jsonModelCandidates(body []byte) []string {
+	return jsonKeyCandidates(body, "model")
+}
+
+func jsonKeyCandidates(body []byte, targetKey string) []string {
 	var out []string
 	gjson.ParseBytes(body).ForEach(func(key, value gjson.Result) bool {
-		if value.Type == gjson.String && strings.EqualFold(key.String(), "model") {
+		if value.Type == gjson.String && strings.EqualFold(key.String(), targetKey) {
 			if trimmed := strings.TrimSpace(value.String()); trimmed != "" {
 				out = append(out, trimmed)
 			}

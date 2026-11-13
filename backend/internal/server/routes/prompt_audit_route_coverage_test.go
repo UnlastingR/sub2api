@@ -48,6 +48,8 @@ func TestEveryGatewayPOSTRouteIsClassifiedForPromptAuditCoverage(t *testing.T) {
 		"/videos/extensions":        {"grok_media.go"},
 		"/models/*modelAction":      {"gemini_v1beta_handler.go"},
 		"/cachedContents":           {"gemini_cached_contents_handler.go"},
+		"/interactions":             {"gemini_interactions_decisions_handler.go"},
+		"/decisions":                {"gemini_interactions_decisions_handler.go"},
 		"/tts":                      {"grok_audio.go"},
 		"/web_search":               {"gateway_web_search.go"},
 		"/x_search":                 {"gateway_web_search.go"},
@@ -55,6 +57,7 @@ func TestEveryGatewayPOSTRouteIsClassifiedForPromptAuditCoverage(t *testing.T) {
 	excluded := map[string]string{
 		"/messages/count_tokens":             "tokenization only; it does not execute a model request",
 		"/images/batches/:id/cancel":         "control-plane cancellation with no user prompt",
+		"/interactions/:interactionID/cancel": "control-plane cancellation with no user prompt",
 		"/stt":                               "speech transcription is not a text-generation prompt",
 		"/custom-voices":                     "voice profile management has no model prompt",
 		"/alpha/:state_namespace/v2/:action": "Codex history/notes state access; it does not execute a model prompt",

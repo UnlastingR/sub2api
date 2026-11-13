@@ -192,3 +192,56 @@ func TestExtractContentModerationInput_ResponsesLastIsAssistantSkipped(t *testin
 	require.Empty(t, input.Text)
 	require.Empty(t, input.Images)
 }
+
+func TestExtractContentModerationInput_GeminiInteractionsAndDecisions(t *testing.T) {
+	t.Run("interactions string input", func(t *testing.T) {
+		input := ExtractContentModerationInput(ContentModerationProtocolGeminiInteractions, []byte(`{"model":"gemini-3.5-flash-lite","input":"check this text"}`))
+		require.Equal(t, "check this text", input.Text)
+	})
+
+	t.Run("interactions multipart input with image uri", func(t *testing.T) {
+		input := ExtractContentModerationInput(ContentModerationProtocolGeminiInteractions, []byte(`{
+			"agent":"deep-research-pro-preview-12-2025",
+			"input":[
+				{"type":"text","text":"analyze image"},
+				{"type":"image","uri":"https://example.com/a.png"}
+			]
+		}`))
+		require.Equal(t, "analyze image", input.Text)
+		require.Equal(t, []string{"https://example.com/a.png"}, input.Images)
+	})
+
+	t.Run("interactions turn content array extracts nested image uri", func(t *testing.T) {
+		input := ExtractContentModerationInput(ContentModerationProtocolGeminiInteractions, []byte(`{
+			"model":"gemini-4-hydrogen",
+			"input":[
+				{"role":"user","content":[{"type":"image","uri":"https://example.com/turn.png"}]}
+			]
+		}`))
+		require.Equal(t, []string{"https://example.com/turn.png"}, input.Images)
+	})
+
+	t.Run("interactions turns skip model-ended history", func(t *testing.T) {
+		input := ExtractContentModerationInput(ContentModerationProtocolGeminiInteractions, []byte(`{
+			"model":"gemini-4-hydrogen",
+			"input":[
+				{"role":"user","content":"old turn"},
+				{"role":"model","content":"assistant reply"}
+			]
+		}`))
+		require.Empty(t, input.Text)
+	})
+
+	t.Run("decisions extracts input and questions without base64 blobs", func(t *testing.T) {
+		input := ExtractContentModerationInput(ContentModerationProtocolGeminiDecisions, []byte(`{
+			"model":"gemini-decision-1",
+			"input":"user prompt context",
+			"questions":{"q1":{"question":"needs search?","choices":["yes","no"]}},
+			"attachment":{"mime_type":"image/png","data":"AAAA"}
+		}`))
+		require.Contains(t, input.Text, "user prompt context")
+		require.Contains(t, input.Text, "needs search?")
+		require.NotContains(t, input.Text, "AAAA")
+		require.Equal(t, []string{"data:image/png;base64,AAAA"}, input.Images)
+	})
+}

@@ -35,6 +35,11 @@ func DefaultModels() []Model {
 		{Name: "models/gemini-3.7-flash", SupportedGenerationMethods: methods},
 		{Name: "models/gemini-3.8-flash", SupportedGenerationMethods: methods},
 		{Name: "models/gemini-4-argon", SupportedGenerationMethods: methods},
+		{Name: "models/gemini-4-carbon", SupportedGenerationMethods: methods},
+		{Name: "models/gemini-4-hydrogen", SupportedGenerationMethods: methods},
+		{Name: "models/gemini-decision-1", SupportedGenerationMethods: methods},
+		{Name: "models/gemini-embedding-001", SupportedGenerationMethods: []string{"embedContent", "batchEmbedContents"}},
+		{Name: "models/gemini-embedding-2", SupportedGenerationMethods: []string{"embedContent", "batchEmbedContents"}},
 	}
 }
 

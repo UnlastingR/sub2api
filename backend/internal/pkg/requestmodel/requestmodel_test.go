@@ -255,3 +255,19 @@ func TestFromBodyForRouteReturnsFirstCandidate(t *testing.T) {
 		t.Fatalf("dispatch helper keeps gjson-first semantics, got %q", got)
 	}
 }
+
+func TestFromBodyCandidatesInteractionsAgent(t *testing.T) {
+	got := FromBodyCandidates("/v1beta/interactions", "application/json", []byte(`{"agent":"deep-research-pro"}`))
+	if len(got) != 1 || got[0] != "deep-research-pro" {
+		t.Fatalf("interactions route must extract agent candidates, got %#v", got)
+	}
+
+	both := FromBodyCandidates("/v1beta/interactions", "application/json", []byte(`{"model":"m1","agent":"a1"}`))
+	if len(both) != 2 || both[0] != "m1" || both[1] != "a1" {
+		t.Fatalf("interactions route must collect both model and agent candidates, got %#v", both)
+	}
+
+	if val, path := JSONModelPathForRoute("/v1beta/interactions", []byte(`{"agent":"deep-research-pro"}`)); val != "deep-research-pro" || path != "agent" {
+		t.Fatalf("unexpected interactions model path (%q, %q)", val, path)
+	}
+}

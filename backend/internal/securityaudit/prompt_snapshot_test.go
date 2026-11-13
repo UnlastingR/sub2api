@@ -462,3 +462,21 @@ func TestPromptSnapshotTypeSafeSystemOneAuditsKeyOnlyPayloads(t *testing.T) {
 		require.Contains(t, snapshot.ScanText, "HIDDEN_QUESTION_ID")
 	}
 }
+
+func TestPromptSnapshotGeminiInteractionsAndDecisions(t *testing.T) {
+	interactionsBody := `{"agent":"deep-research-pro","system_instruction":"be strict","input":[{"role":"user","content":[{"type":"text","text":"old"}]},{"role":"model","content":"reply"},{"role":"user","content":[{"type":"text","text":"latest audit target"}]}]}`
+	fullSnap, err := ExtractPromptSnapshot(Request{Protocol: "gemini_interactions", Body: []byte(interactionsBody)})
+	require.NoError(t, err)
+	require.Contains(t, fullSnap.FullPrompt, "be strict")
+
+	blockingSnap, err := ExtractBlockingPromptSnapshot(Request{Protocol: "gemini_interactions", Body: []byte(interactionsBody)}, true)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(blockingSnap.ScanText, "latest audit target"))
+
+	decisionsBody := `{"model":"gemini-decision-1","input":"evaluate safety","questions":{"safety":{"question":"contains secret?"}},"image":{"mime_type":"image/png","data":"` + strings.Repeat("A", 300) + `"}}`
+	decSnap, err := ExtractPromptSnapshot(Request{Protocol: "gemini_decisions", Body: []byte(decisionsBody)})
+	require.NoError(t, err)
+	require.Contains(t, decSnap.ScanText, "evaluate safety")
+	require.Contains(t, decSnap.ScanText, "contains secret?")
+	require.NotContains(t, decSnap.FullPrompt, strings.Repeat("A", 300))
+}
