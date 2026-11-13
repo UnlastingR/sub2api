@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,8 +25,13 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+// GeminiInteractionBillingRequestIDPrefix identifies interaction usage_logs rows
+// so resolveUsageBillingRequestID preserves them instead of overwriting with client/local IDs.
+const GeminiInteractionBillingRequestIDPrefix = "gemini_interaction:"
+
 const (
 	maxGeminiInteractionIDLen           = 256
+	maxGeminiInteractionRequestIDLen    = 64
 	geminiInteractionBindingTTL         = 7 * 24 * time.Hour
 	geminiInteractionClaimLeaseTTL      = 2 * time.Minute
 	geminiInteractionOwnerCachePrefix   = "gemini:interaction:owner:"
@@ -33,6 +40,22 @@ const (
 	geminiInteractionMetaCachePrefix    = "gemini:interaction:meta:"
 	geminiInteractionSettledPrefix      = "gemini:interaction:settled:"
 )
+
+// GeminiInteractionBillingRequestID builds a deterministic <=64-char request_id
+// for usage_logs (VARCHAR(64)), preserving the literal suffix for short IDs and
+// hashing longer Google interaction IDs with a 176-bit SHA-256 hex digest.
+func GeminiInteractionBillingRequestID(interactionID string) string {
+	id := strings.TrimSpace(interactionID)
+	if id == "" {
+		return ""
+	}
+	candidate := GeminiInteractionBillingRequestIDPrefix + id
+	if len(candidate) <= maxGeminiInteractionRequestIDLen {
+		return candidate
+	}
+	sum := sha256.Sum256([]byte(id))
+	return GeminiInteractionBillingRequestIDPrefix + hex.EncodeToString(sum[:22])
+}
 
 // GeminiInteractionMeta preserves creation-time billing and channel mapping metadata
 // so deferred background GET polling and delayed reconciliation bill identically to synchronous responses.
