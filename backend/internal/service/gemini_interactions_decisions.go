@@ -1,12 +1,14 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"sort"
@@ -423,7 +425,7 @@ func (s *GeminiMessagesCompatService) ForwardDecisions(
 		Body:          upstreamBody,
 		OriginalModel: originalModel,
 		MappedModel:   mappedModel,
-		ExtractUsage:  extractGeminiUsage,
+		ExtractUsage:  extractGeminiInteractionUsage,
 	})
 	return res, err
 }
@@ -641,7 +643,7 @@ func (s *GeminiMessagesCompatService) forwardGeminiAIStudioEndpoint(
 		return nil, "", "", s.writeGeminiNativeUpstreamError(c, account, resp, respBody, requestID, false)
 	}
 
-	isSSE := spec.Stream || strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+	isSSE, bodyReader := classifyGeminiAIStudioResponseSSE(resp.Body, spec.Stream, resp.Header.Get("Content-Type"))
 	var (
 		usage               *ClaudeUsage
 		firstTokenMs        *int
@@ -652,7 +654,7 @@ func (s *GeminiMessagesCompatService) forwardGeminiAIStudioEndpoint(
 		interactionTerminal bool
 	)
 	if isSSE {
-		streamRes, streamID, streamModel, streamImages, streamTerminal, streamErr := s.handleGeminiAIStudioStreamingResponse(c, resp, startTime, account, spec.ExtractUsage, spec.OnInteractionID)
+		streamRes, streamID, streamModel, streamImages, streamTerminal, streamErr := s.handleGeminiAIStudioStreamingResponse(c, resp, bodyReader, startTime, account, spec.ExtractUsage, spec.OnInteractionID)
 		if streamErr != nil {
 			return nil, streamID, streamModel, streamErr
 		}
@@ -664,7 +666,7 @@ func (s *GeminiMessagesCompatService) forwardGeminiAIStudioEndpoint(
 		imageCount = streamImages
 		interactionTerminal = streamTerminal
 	} else {
-		respBody, readErr := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
+		respBody, readErr := ReadUpstreamResponseBody(bodyReader, s.cfg, c, openAITooLargeError)
 		if readErr != nil {
 			return nil, "", "", readErr
 		}
@@ -886,9 +888,29 @@ func sanitizedGeminiInteractionQuery(raw url.Values) url.Values {
 	return out
 }
 
+// classifyGeminiAIStudioResponseSSE decides whether to parse the upstream body as SSE.
+// An explicit media type (such as application/json) overrides specStream; missing
+// Content-Type with specStream peeks a bounded prefix to distinguish JSON from SSE.
+func classifyGeminiAIStudioResponseSSE(body io.Reader, specStream bool, contentType string) (bool, io.Reader) {
+	if mediaType, _, err := mime.ParseMediaType(contentType); err == nil && mediaType != "" {
+		return strings.EqualFold(mediaType, "text/event-stream"), body
+	}
+	if !specStream {
+		return false, body
+	}
+	br := bufio.NewReader(body)
+	peek, _ := br.Peek(512)
+	trimmed := bytes.TrimSpace(bytes.TrimPrefix(peek, []byte("\xef\xbb\xbf")))
+	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+		return false, br
+	}
+	return true, br
+}
+
 func (s *GeminiMessagesCompatService) handleGeminiAIStudioStreamingResponse(
 	c *gin.Context,
 	resp *http.Response,
+	bodyReader io.Reader,
 	startTime time.Time,
 	account *Account,
 	extractUsageFn func([]byte) *ClaudeUsage,
@@ -912,28 +934,36 @@ func (s *GeminiMessagesCompatService) handleGeminiAIStudioStreamingResponse(
 		return nil, "", "", 0, false, errors.New("streaming not supported")
 	}
 
-	reader := newBoundedSSELineReader(resp.Body, s.cfg)
+	if bodyReader == nil {
+		bodyReader = resp.Body
+	}
+	reader := newBoundedSSELineReader(bodyReader, s.cfg)
 	usage := &ClaudeUsage{}
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	var (
-		firstTokenMs        *int
-		clientDisconnect    bool
-		interactionID       string
-		observedModel       string
-		snapshotImages      int
-		deltaImages         int
-		sawNonTerminal      bool
-		interactionTerminal bool
+		firstTokenMs         *int
+		clientDisconnect     bool
+		interactionID        string
+		observedModel        string
+		snapshotImages       int
+		unindexedDeltaImages int
+		seenDeltaImageKeys   map[string]struct{}
+		currentSSEEvent      string
+		interactionTerminal  bool
 	)
 
 	for {
 		line, err := reader.ReadLineString()
 		if len(line) > 0 && (err == nil || errors.Is(err, io.EOF)) {
 			trimmed := strings.TrimRight(line, "\r\n")
-			if strings.HasPrefix(trimmed, "data:") {
+			if trimmed == "" {
+				currentSSEEvent = ""
+			} else if strings.HasPrefix(trimmed, "event:") {
+				currentSSEEvent = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(trimmed, "event:")))
+			} else if strings.HasPrefix(trimmed, "data:") {
 				payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
 				if payload != "" && payload != "[DONE]" {
 					rawBytes := []byte(payload)
@@ -955,15 +985,28 @@ func (s *GeminiMessagesCompatService) handleGeminiAIStudioStreamingResponse(
 						snapshotImages = imgCount
 					}
 					if isGeminiInteractionImageDelta(rawBytes) {
-						deltaImages++
+						if key, hasKey := geminiInteractionDeltaImageKey(rawBytes); hasKey {
+							if seenDeltaImageKeys == nil {
+								seenDeltaImageKeys = make(map[string]struct{})
+							}
+							seenDeltaImageKeys[key] = struct{}{}
+						} else {
+							unindexedDeltaImages++
+						}
 					}
 					eventType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(rawBytes, "event_type").String()))
+					if eventType == "" {
+						eventType = currentSSEEvent
+					}
 					_, statusTerminal, hasStatus := extractGeminiInteractionTerminalStatus(rawBytes)
-					if eventType == "interaction.completed" || eventType == "interaction.failed" || eventType == "interaction.cancelled" || (hasStatus && statusTerminal) {
+					switch {
+					case hasStatus && statusTerminal:
 						interactionTerminal = true
-						sawNonTerminal = false
-					} else if (hasStatus && !statusTerminal) || eventType == "interaction.start" {
-						sawNonTerminal = true
+					case hasStatus && !statusTerminal:
+						interactionTerminal = false
+					case eventType == "interaction.completed" || eventType == "interaction.complete" || eventType == "interaction.failed" || eventType == "interaction.cancelled" || eventType == "interaction.canceled":
+						interactionTerminal = true
+					case eventType == "interaction.start" || eventType == "interaction.created":
 						interactionTerminal = false
 					}
 					observeGeminiInteractionModel(observer, rawBytes, interactionTerminal)
@@ -978,13 +1021,10 @@ func (s *GeminiMessagesCompatService) handleGeminiAIStudioStreamingResponse(
 		}
 
 		if errors.Is(err, io.EOF) {
-			if !sawNonTerminal {
-				interactionTerminal = true
-			}
 			break
 		}
 		if err != nil {
-			observedImages := max(snapshotImages, deltaImages)
+			observedImages := max(snapshotImages, len(seenDeltaImageKeys)+unindexedDeltaImages)
 			if !interactionTerminal || (!geminiStreamAbortedWithBillableOutput(c, err, usage) && observedImages == 0) {
 				return nil, interactionID, observedModel, observedImages, interactionTerminal, err
 			}
@@ -998,7 +1038,7 @@ func (s *GeminiMessagesCompatService) handleGeminiAIStudioStreamingResponse(
 		usage:            usage,
 		firstTokenMs:     firstTokenMs,
 		clientDisconnect: clientDisconnect,
-	}, interactionID, observedModel, max(snapshotImages, deltaImages), interactionTerminal, nil
+	}, interactionID, observedModel, max(snapshotImages, len(seenDeltaImageKeys)+unindexedDeltaImages), interactionTerminal, nil
 }
 
 func rewriteGeminiAIStudioBodyModel(body []byte, mappedModel string) []byte {
@@ -1062,12 +1102,19 @@ func countGeminiInteractionImages(payload []byte) int {
 		return 0
 	}
 	count := countGeminiImageOutputs(payload)
+	outputsCount := 0
 	if outputs := gjson.GetBytes(payload, "interaction.outputs"); outputs.IsArray() {
-		count += countInteractionOutputsArrayImages(outputs)
+		outputsCount = countInteractionOutputsArrayImages(outputs)
 	} else if outputs := gjson.GetBytes(payload, "outputs"); outputs.IsArray() {
-		count += countInteractionOutputsArrayImages(outputs)
+		outputsCount = countInteractionOutputsArrayImages(outputs)
 	}
-	return count
+	stepsCount := 0
+	if steps := gjson.GetBytes(payload, "interaction.steps"); steps.IsArray() {
+		stepsCount = countInteractionStepsArrayImages(steps)
+	} else if steps := gjson.GetBytes(payload, "steps"); steps.IsArray() {
+		stepsCount = countInteractionStepsArrayImages(steps)
+	}
+	return count + max(outputsCount, stepsCount)
 }
 
 func countInteractionOutputsArrayImages(outputs gjson.Result) int {
@@ -1081,9 +1128,33 @@ func countInteractionOutputsArrayImages(outputs gjson.Result) int {
 	return count
 }
 
+func countInteractionStepsArrayImages(steps gjson.Result) int {
+	count := 0
+	steps.ForEach(func(_, step gjson.Result) bool {
+		if !strings.EqualFold(strings.TrimSpace(step.Get("type").String()), "model_output") {
+			return true
+		}
+		if content := step.Get("content"); content.IsArray() {
+			count += countInteractionOutputsArrayImages(content)
+		}
+		return true
+	})
+	return count
+}
+
 func isGeminiInteractionImageDelta(payload []byte) bool {
 	delta := gjson.GetBytes(payload, "delta")
 	return delta.IsObject() && isInteractionImageItem(delta)
+}
+
+func geminiInteractionDeltaImageKey(payload []byte) (string, bool) {
+	stepIdx := gjson.GetBytes(payload, "step_index")
+	contentIdx := gjson.GetBytes(payload, "content_index")
+	idx := gjson.GetBytes(payload, "index")
+	if !stepIdx.Exists() && !contentIdx.Exists() && !idx.Exists() {
+		return "", false
+	}
+	return stepIdx.Raw + ":" + contentIdx.Raw + ":" + idx.Raw, true
 }
 
 func extractGeminiInteractionTerminalStatus(payload []byte) (status string, isTerminal bool, hasStatus bool) {
@@ -1095,7 +1166,7 @@ func extractGeminiInteractionTerminalStatus(payload []byte) (status string, isTe
 		return "", false, false
 	}
 	switch status {
-	case "completed", "failed", "cancelled", "canceled", "incomplete":
+	case "completed", "failed", "cancelled", "canceled", "incomplete", "requires_action", "requires_continuation", "budget_exceeded":
 		return status, true, true
 	default:
 		return status, false, true
@@ -1150,13 +1221,22 @@ func extractGeminiInteractionUsage(data []byte) *ClaudeUsage {
 }
 
 // ParseGeminiInteractionBody validates JSON payload for POST /v1beta/interactions
-// and returns (modelOrAgent, previousInteractionID, stream).
+// and returns (modelOrAgent, previousInteractionID, stream, ok).
 func ParseGeminiInteractionBody(body []byte) (model string, previousInteractionID string, stream bool, ok bool) {
+	model, previousInteractionID, stream, _, ok = ParseGeminiInteractionBodyWithStreamFlag(body)
+	return model, previousInteractionID, stream, ok
+}
+
+// ParseGeminiInteractionBodyWithStreamFlag validates JSON payload for POST /v1beta/interactions
+// and also reports whether the "stream" field was explicitly provided in JSON.
+func ParseGeminiInteractionBodyWithStreamFlag(body []byte) (model string, previousInteractionID string, stream bool, hasStreamField bool, ok bool) {
 	if !json.Valid(body) {
-		return "", "", false, false
+		return "", "", false, false, false
 	}
 	model = ExtractGeminiAIStudioBodyModel("/interactions", body)
 	previousInteractionID = strings.TrimSpace(gjson.GetBytes(body, "previous_interaction_id").String())
-	stream = gjson.GetBytes(body, "stream").Bool()
-	return model, previousInteractionID, stream, true
+	streamField := gjson.GetBytes(body, "stream")
+	hasStreamField = streamField.Exists()
+	stream = streamField.Bool()
+	return model, previousInteractionID, stream, hasStreamField, true
 }

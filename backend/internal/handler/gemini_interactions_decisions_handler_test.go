@@ -289,9 +289,10 @@ func (r *interactionTestUsageRepo) snapshot() []*service.UsageLog {
 }
 
 type interactionTestUpstream struct {
-	mu     sync.Mutex
-	status int
-	body   string
+	mu      sync.Mutex
+	status  int
+	body    string
+	lastReq *http.Request
 }
 
 func (u *interactionTestUpstream) setBody(body string) {
@@ -308,8 +309,9 @@ func (u *interactionTestUpstream) setResponse(status int, body string) {
 	u.body = body
 }
 
-func (u *interactionTestUpstream) Do(*http.Request, string, int64, int) (*http.Response, error) {
+func (u *interactionTestUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
 	u.mu.Lock()
+	u.lastReq = req
 	status := u.status
 	if status == 0 {
 		status = http.StatusOK
@@ -644,4 +646,154 @@ func TestGeminiInteractionsDeferredBilling_SettlementFixes(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, due, "v1_del_503")
 	})
+}
+
+func TestParseAcceptPrefersSSE(t *testing.T) {
+	require.False(t, parseAcceptPrefersSSE(""))
+	require.False(t, parseAcceptPrefersSSE("*/*"))
+	require.False(t, parseAcceptPrefersSSE("application/json;q=1, text/event-stream;q=0"))
+	require.False(t, parseAcceptPrefersSSE("text/event-stream;q=0.0, application/json"))
+	require.False(t, parseAcceptPrefersSSE("application/json, text/event-stream"))
+	require.True(t, parseAcceptPrefersSSE("text/event-stream"))
+	require.True(t, parseAcceptPrefersSSE("text/event-stream, application/json;q=0.8"))
+}
+
+func TestGeminiInteractionsGetStreamNegotiation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("GET with Accept q=0 for SSE uses non-streaming JSON", func(t *testing.T) {
+		h, _, cache, usageRepo, upstream, account, originKey, _ := newInteractionBillingTestHandler(
+			t,
+			`{"id":"v1_get_json","model":"gemini-3.5-flash-lite","status":"completed","usage":{"total_input_tokens":44,"total_output_tokens":11}}`,
+		)
+		gid := *originKey.GroupID
+		require.NoError(t, h.geminiCompatService.BindGeminiInteractionAccount(context.Background(), &gid, originKey.UserID, "v1_get_json", account.ID))
+		require.NoError(t, h.geminiCompatService.SaveGeminiInteractionMeta(context.Background(), "v1_get_json", service.GeminiInteractionMeta{
+			RequestModel:      "gemini-3.5-flash-lite",
+			UpstreamModel:     "gemini-3.5-flash-lite",
+			APIKeyID:          originKey.ID,
+			UserID:            originKey.UserID,
+			AccountID:         account.ID,
+			PricingAtUnixNano: time.Now().UnixNano(),
+		}))
+		_ = cache
+
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1beta/interactions/v1_get_json", nil)
+		c.Request.Header.Set("Accept", "application/json;q=1, text/event-stream;q=0")
+		c.Params = gin.Params{{Key: "interactionID", Value: "v1_get_json"}}
+		c.Set(string(middleware.ContextKeyAPIKey), originKey)
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: originKey.UserID, Concurrency: 1})
+
+		h.GeminiV1BetaInteractionsGet(c)
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		upstream.mu.Lock()
+		lastAccept := upstream.lastReq.Header.Get("Accept")
+		lastStreamQuery := upstream.lastReq.URL.Query().Get("stream")
+		upstream.mu.Unlock()
+		require.Empty(t, lastAccept)
+		require.Empty(t, lastStreamQuery)
+
+		logs := usageRepo.snapshot()
+		require.Len(t, logs, 1)
+		require.Equal(t, 44, logs[0].InputTokens)
+		require.Equal(t, 11, logs[0].OutputTokens)
+	})
+
+	t.Run("GET with explicit stream=false overrides Accept text/event-stream", func(t *testing.T) {
+		h, _, _, _, upstream, account, originKey, _ := newInteractionBillingTestHandler(
+			t,
+			`{"id":"v1_get_qfalse","model":"gemini-3.5-flash-lite","status":"completed"}`,
+		)
+		gid := *originKey.GroupID
+		require.NoError(t, h.geminiCompatService.BindGeminiInteractionAccount(context.Background(), &gid, originKey.UserID, "v1_get_qfalse", account.ID))
+
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1beta/interactions/v1_get_qfalse?stream=false", nil)
+		c.Request.Header.Set("Accept", "text/event-stream")
+		c.Params = gin.Params{{Key: "interactionID", Value: "v1_get_qfalse"}}
+		c.Set(string(middleware.ContextKeyAPIKey), originKey)
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: originKey.UserID, Concurrency: 1})
+
+		h.GeminiV1BetaInteractionsGet(c)
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		upstream.mu.Lock()
+		lastAccept := upstream.lastReq.Header.Get("Accept")
+		upstream.mu.Unlock()
+		require.Empty(t, lastAccept)
+	})
+}
+
+func TestGeminiInteractionsDelete_ActiveClaimLeaseReturns503(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, _, _, _, _, account, originKey, _ := newInteractionBillingTestHandler(
+		t,
+		`{"id":"v1_del_lease","model":"gemini-3.5-flash-lite","status":"completed","usage":{"total_input_tokens":50,"total_output_tokens":10}}`,
+	)
+	gid := *originKey.GroupID
+	require.NoError(t, h.geminiCompatService.BindGeminiInteractionAccount(context.Background(), &gid, originKey.UserID, "v1_del_lease", account.ID))
+	require.NoError(t, h.geminiCompatService.ScheduleGeminiInteractionPending(context.Background(), "v1_del_lease", time.Now().Add(-time.Second)))
+
+	// Another worker holds the active claim lease while RecordUsage has not finished (settled=false).
+	claimed, err := h.geminiCompatService.ClaimGeminiInteractionBilled(context.Background(), "v1_del_lease")
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/v1beta/interactions/v1_del_lease", nil)
+	c.Params = gin.Params{{Key: "interactionID", Value: "v1_del_lease"}}
+	c.Set(string(middleware.ContextKeyAPIKey), originKey)
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: originKey.UserID, Concurrency: 1})
+
+	h.GeminiV1BetaInteractionsDelete(c)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	due, err := h.geminiCompatService.ListDueGeminiInteractionPending(context.Background(), time.Now(), 10)
+	require.NoError(t, err)
+	require.Contains(t, due, "v1_del_lease")
+}
+
+func TestGeminiInteractionsPost_ExplicitStreamFalseAndQZeroAccept(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, _, _, usageRepo, upstream, account, originKey, _ := newInteractionBillingTestHandler(
+		t,
+		`{"id":"v1_post_json","model":"gemini-3.5-flash-lite","status":"completed","usage":{"total_input_tokens":33,"total_output_tokens":7}}`,
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := `{"input":"Reply with OK only","model":"gemini-3.5-flash-lite","stream":false}`
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("Accept", "application/json;q=1, text/event-stream;q=0")
+	c.Set(string(middleware.ContextKeyAPIKey), originKey)
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: originKey.UserID, Concurrency: 1})
+
+	h.GeminiV1BetaInteractionsCreate(c)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	upstream.mu.Lock()
+	lastAccept := upstream.lastReq.Header.Get("Accept")
+	upstream.mu.Unlock()
+	require.Empty(t, lastAccept)
+
+	// Interaction owner/account/meta/settled bindings must be persisted even on non-streaming POST.
+	acctID, verified, err := h.geminiCompatService.ResolveGeminiInteractionAccount(context.Background(), originKey.GroupID, originKey.UserID, "v1_post_json")
+	require.NoError(t, err)
+	require.True(t, verified)
+	require.Equal(t, account.ID, acctID)
+
+	settled, err := h.geminiCompatService.IsGeminiInteractionSettled(context.Background(), "v1_post_json")
+	require.NoError(t, err)
+	require.True(t, settled)
+
+	logs := usageRepo.snapshot()
+	require.Len(t, logs, 1)
+	require.Equal(t, 33, logs[0].InputTokens)
+	require.Equal(t, 7, logs[0].OutputTokens)
 }

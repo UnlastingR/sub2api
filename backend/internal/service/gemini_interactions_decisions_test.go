@@ -611,3 +611,178 @@ func TestGeminiInteractions_ImageCountsModelObservationAndSnapshotPolling(t *tes
 		require.False(t, ok4)
 	})
 }
+
+func TestParseGeminiInteractionBodyWithStreamFlag(t *testing.T) {
+	model, prevID, stream, hasStream, ok := ParseGeminiInteractionBodyWithStreamFlag([]byte(`{"model":"gemini-3.5-flash-lite","stream":false}`))
+	require.True(t, ok)
+	require.Equal(t, "gemini-3.5-flash-lite", model)
+	require.Empty(t, prevID)
+	require.False(t, stream)
+	require.True(t, hasStream)
+
+	model, _, stream, hasStream, ok = ParseGeminiInteractionBodyWithStreamFlag([]byte(`{"model":"gemini-3.5-flash-lite","stream":true}`))
+	require.True(t, ok)
+	require.Equal(t, "gemini-3.5-flash-lite", model)
+	require.True(t, stream)
+	require.True(t, hasStream)
+
+	_, prevID, stream, hasStream, ok = ParseGeminiInteractionBodyWithStreamFlag([]byte(`{"agent":"deep-research","previous_interaction_id":"v1_prev"}`))
+	require.True(t, ok)
+	require.Equal(t, "v1_prev", prevID)
+	require.False(t, stream)
+	require.False(t, hasStream)
+}
+
+func TestForwardDecisions_OfficialUsageFormat(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstream := &httpUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"answers":{"need_search":{"answer":true}},"usage":{"total_input_tokens":128,"total_cached_tokens":28,"total_output_tokens":6,"total_thought_tokens":2}}`,
+			)),
+		},
+	}
+	svc := &GeminiMessagesCompatService{httpUpstream: upstream, cfg: &config.Config{}}
+	account := &Account{ID: 10, Platform: PlatformGemini, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "sk-goog"}}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/decisions", nil)
+
+	res, err := svc.ForwardDecisions(context.Background(), c, account, "gemini-decision-1", "gemini-decision-1", []byte(`{"model":"gemini-decision-1","input":"hi"}`))
+	require.NoError(t, err)
+	require.Equal(t, 100, res.Usage.InputTokens)
+	require.Equal(t, 28, res.Usage.CacheReadInputTokens)
+	require.Equal(t, 8, res.Usage.OutputTokens)
+}
+
+func TestForwardInteractionCreate_EdgeCases(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := &Account{ID: 11, Platform: PlatformGemini, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "sk-goog"}}
+
+	t.Run("stream request receiving application/json parses JSON interaction and usage", func(t *testing.T) {
+		upstream := &httpUpstreamRecorder{
+			resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json; charset=utf-8"}},
+				Body: io.NopCloser(strings.NewReader(
+					`{"id":"v1_json_override","model":"gemini-3.5-flash-lite","status":"completed","usage":{"total_input_tokens":75,"total_output_tokens":15}}`,
+				)),
+			},
+		}
+		svc := &GeminiMessagesCompatService{httpUpstream: upstream, cfg: &config.Config{}}
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", nil)
+
+		var callbackID string
+		res, id, err := svc.ForwardInteractionCreate(context.Background(), c, account, "gemini-3.5-flash-lite", "gemini-3.5-flash-lite", true, []byte(`{"model":"gemini-3.5-flash-lite","input":"hi","stream":true}`), func(got string) {
+			callbackID = got
+		})
+		require.NoError(t, err)
+		require.Equal(t, "v1_json_override", id)
+		require.Equal(t, "v1_json_override", callbackID)
+		require.False(t, res.Stream)
+		require.True(t, res.InteractionTerminal)
+		require.Equal(t, 75, res.Usage.InputTokens)
+		require.Equal(t, 15, res.Usage.OutputTokens)
+	})
+
+	t.Run("stream request with missing Content-Type sniffs JSON body", func(t *testing.T) {
+		upstream := &httpUpstreamRecorder{
+			resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+				Body: io.NopCloser(strings.NewReader(
+					`  {"id":"v1_sniff_json","model":"gemini-3.5-flash-lite","status":"completed","usage":{"total_input_tokens":10,"total_output_tokens":5}}`,
+				)),
+			},
+		}
+		svc := &GeminiMessagesCompatService{httpUpstream: upstream, cfg: &config.Config{}}
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", nil)
+
+		res, id, err := svc.ForwardInteractionCreate(context.Background(), c, account, "gemini-3.5-flash-lite", "gemini-3.5-flash-lite", true, []byte(`{"model":"gemini-3.5-flash-lite","input":"hi"}`), nil)
+		require.NoError(t, err)
+		require.Equal(t, "v1_sniff_json", id)
+		require.False(t, res.Stream)
+		require.True(t, res.InteractionTerminal)
+		require.Equal(t, 10, res.Usage.InputTokens)
+	})
+
+	t.Run("empty or delta-only SSE EOF does not mark interaction terminal", func(t *testing.T) {
+		ssePayload := strings.Join([]string{
+			`event: content.delta`,
+			`data: {"event_type":"content.delta","interaction_id":"v1_partial_sse","delta":{"type":"text","text":"chunk"}}`,
+			``,
+		}, "\n")
+		upstream := &httpUpstreamRecorder{
+			resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(ssePayload)),
+			},
+		}
+		svc := &GeminiMessagesCompatService{httpUpstream: upstream, cfg: &config.Config{}}
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1beta/interactions/v1_partial_sse?stream=true", nil)
+
+		res, _, err := svc.ForwardInteractionByID(context.Background(), c, account, http.MethodGet, "v1_partial_sse", false, nil, true)
+		require.NoError(t, err)
+		require.False(t, res.InteractionTerminal)
+	})
+
+	t.Run("requires_action, requires_continuation, and budget_exceeded count as terminal statuses", func(t *testing.T) {
+		for _, status := range []string{"requires_action", "requires_continuation", "budget_exceeded"} {
+			got, isTerminal, hasStatus := extractGeminiInteractionTerminalStatus([]byte(`{"id":"v1_t","status":"` + status + `"}`))
+			require.True(t, hasStatus, status)
+			require.Equal(t, status, got, status)
+			require.True(t, isTerminal, status)
+		}
+		got, isTerminal, hasStatus := extractGeminiInteractionTerminalStatus([]byte(`{"id":"v1_r","status":"in_progress"}`))
+		require.True(t, hasStatus)
+		require.Equal(t, "in_progress", got)
+		require.False(t, isTerminal)
+	})
+
+	t.Run("countGeminiInteractionImages reads model_output steps only and deduplicates indexed SSE image deltas", func(t *testing.T) {
+		payload := []byte(`{
+			"steps":[
+				{"type":"user_input","content":[{"type":"image","data":"USERIMG"}]},
+				{"type":"model_output","content":[{"type":"text","text":"ok"},{"type":"image","data":"GEN1"},{"type":"image","uri":"https://example.com/gen2.png"}]}
+			]
+		}`)
+		require.Equal(t, 2, countGeminiInteractionImages(payload))
+
+		ssePayload := strings.Join([]string{
+			`event: content.delta`,
+			`data: {"event_type":"content.delta","step_index":1,"index":0,"delta":{"type":"image","data":"AAA"}}`,
+			``,
+			`event: content.delta`,
+			`data: {"event_type":"content.delta","step_index":1,"index":0,"delta":{"type":"image","data":"BBB"}}`,
+			``,
+			`event: interaction.completed`,
+			`data: {"event_type":"interaction.completed","interaction":{"id":"v1_step_img","model":"gemini-3-pro-image-preview","steps":[{"type":"model_output","content":[{"type":"image","data":"FINAL1"}]}]}}`,
+			``,
+		}, "\n")
+		upstream := &httpUpstreamRecorder{
+			resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(ssePayload)),
+			},
+		}
+		svc := &GeminiMessagesCompatService{httpUpstream: upstream, cfg: &config.Config{}}
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", nil)
+
+		res, _, err := svc.ForwardInteractionCreate(context.Background(), c, account, "gemini-3-pro-image-preview", "gemini-3-pro-image-preview", true, []byte(`{"model":"gemini-3-pro-image-preview","input":"draw","stream":true}`), nil)
+		require.NoError(t, err)
+		require.Equal(t, 1, res.ImageCount)
+	})
+}

@@ -54,9 +54,69 @@ func (h *GatewayHandler) GeminiV1BetaInteractionsCreate(c *gin.Context) {
 
 // GeminiV1BetaInteractionsGet proxies GET /v1beta/interactions/:interactionID.
 func (h *GatewayHandler) GeminiV1BetaInteractionsGet(c *gin.Context) {
-	stream := strings.EqualFold(strings.TrimSpace(c.Query("stream")), "true") ||
-		strings.Contains(strings.ToLower(c.GetHeader("Accept")), "text/event-stream")
+	stream := false
+	if streamParam := strings.TrimSpace(c.Query("stream")); streamParam != "" {
+		if parsed, err := strconv.ParseBool(streamParam); err == nil {
+			stream = parsed
+		} else {
+			stream = strings.EqualFold(streamParam, "true")
+		}
+	} else {
+		stream = parseAcceptPrefersSSE(c.GetHeader("Accept"))
+	}
 	h.handleGeminiInteractionByID(c, http.MethodGet, false, stream)
+}
+
+// parseAcceptPrefersSSE evaluates RFC-style Accept media ranges and q-weights,
+// returning true only when text/event-stream has q > 0 and strictly beats application/json.
+func parseAcceptPrefersSSE(acceptHeader string) bool {
+	if acceptHeader == "" {
+		return false
+	}
+	var (
+		hasSSE  bool
+		sseQ    float64
+		hasJSON bool
+		jsonQ   float64
+	)
+	for _, part := range strings.Split(acceptHeader, ",") {
+		segments := strings.Split(strings.TrimSpace(part), ";")
+		mediaType := strings.ToLower(strings.TrimSpace(segments[0]))
+		if mediaType != "text/event-stream" && mediaType != "application/json" {
+			continue
+		}
+		q := 1.0
+		validQ := true
+		for _, param := range segments[1:] {
+			kv := strings.SplitN(strings.TrimSpace(param), "=", 2)
+			if len(kv) != 2 || !strings.EqualFold(strings.TrimSpace(kv[0]), "q") {
+				continue
+			}
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(kv[1]), 64)
+			if err != nil || parsed < 0 || parsed > 1 {
+				validQ = false
+				break
+			}
+			q = parsed
+		}
+		if !validQ {
+			continue
+		}
+		if mediaType == "text/event-stream" && (!hasSSE || q > sseQ) {
+			hasSSE = true
+			sseQ = q
+		} else if mediaType == "application/json" && (!hasJSON || q > jsonQ) {
+			hasJSON = true
+			jsonQ = q
+		}
+	}
+	if !hasSSE || sseQ <= 0 {
+		return false
+	}
+	if hasJSON && jsonQ >= sseQ {
+		return false
+	}
+	return true
 }
 
 // GeminiV1BetaInteractionsCancel proxies POST /v1beta/interactions/:interactionID/cancel.
@@ -140,8 +200,8 @@ func (h *GatewayHandler) handleGeminiAIStudioPost(c *gin.Context, isDecisions bo
 			return
 		}
 	} else {
-		var validJSON bool
-		modelName, previousInteractionID, stream, validJSON = service.ParseGeminiInteractionBody(body)
+		var validJSON, hasStreamField bool
+		modelName, previousInteractionID, stream, hasStreamField, validJSON = service.ParseGeminiInteractionBodyWithStreamFlag(body)
 		if !validJSON {
 			googleError(c, http.StatusBadRequest, "Invalid JSON request body")
 			return
@@ -150,7 +210,7 @@ func (h *GatewayHandler) handleGeminiAIStudioPost(c *gin.Context, isDecisions bo
 			googleError(c, http.StatusBadRequest, "model or agent is required")
 			return
 		}
-		if strings.Contains(strings.ToLower(c.GetHeader("Accept")), "text/event-stream") {
+		if !hasStreamField && parseAcceptPrefersSSE(c.GetHeader("Accept")) {
 			stream = true
 		}
 		if previousInteractionID != "" && !service.IsSafeGeminiInteractionID(previousInteractionID) {
@@ -352,10 +412,11 @@ func (h *GatewayHandler) handleGeminiAIStudioPost(c *gin.Context, isDecisions bo
 			if id == "" || boundInteractionID == id {
 				return
 			}
-			boundInteractionID = id
 			bindCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), geminiInteractionBindTimeout)
 			defer cancel()
+			allOK := true
 			if bindErr := h.geminiCompatService.BindGeminiInteractionAccount(bindCtx, apiKey.GroupID, authSubject.UserID, id, account.ID); bindErr != nil {
+				allOK = false
 				reqLog.Warn("gemini.interaction.bind_account_failed", zap.String("interaction_id", id), zap.Int64("account_id", account.ID), zap.Error(bindErr))
 			}
 			var subID *int64
@@ -382,10 +443,15 @@ func (h *GatewayHandler) handleGeminiAIStudioPost(c *gin.Context, isDecisions bo
 				SessionID:          service.ExtractClientSessionID(c),
 			}
 			if metaErr := h.geminiCompatService.SaveGeminiInteractionMeta(bindCtx, id, meta); metaErr != nil {
+				allOK = false
 				reqLog.Warn("gemini.interaction.save_meta_failed", zap.String("interaction_id", id), zap.Error(metaErr))
 			}
 			if schedErr := h.geminiCompatService.ScheduleGeminiInteractionPending(bindCtx, id, time.Now().Add(geminiInteractionSlowPollReschedule)); schedErr != nil {
+				allOK = false
 				reqLog.Warn("gemini.interaction.schedule_pending_failed", zap.String("interaction_id", id), zap.Error(schedErr))
+			}
+			if allOK {
+				boundInteractionID = id
 			}
 		}
 		if isDecisions {
@@ -447,14 +513,14 @@ func (h *GatewayHandler) handleGeminiAIStudioPost(c *gin.Context, isDecisions bo
 			return
 		}
 
-		if result.InteractionTerminal && !hasBillableGeminiResult(result) && !isDecisions && pendingInteractionID != "" {
+		if result.InteractionTerminal && !result.Stream && !hasBillableGeminiResult(result) && !isDecisions && pendingInteractionID != "" {
 			cleanCtx, cancelClean := context.WithTimeout(context.WithoutCancel(c.Request.Context()), geminiInteractionBindTimeout)
 			_ = h.geminiCompatService.RemoveGeminiInteractionPending(cleanCtx, pendingInteractionID)
 			cancelClean()
 			return
 		}
 
-		if !result.InteractionTerminal && h.gatewayService != nil && h.geminiCompatService != nil {
+		if (!result.InteractionTerminal || (result.Stream && !hasBillableGeminiResult(result))) && h.gatewayService != nil && h.geminiCompatService != nil {
 			channelUsageFields := clientRequestedUsageFields(c, channelMapping, reqModel, mappedModel)
 			snap := captureGeminiInteractionUsageSnapshot(c, apiKey, account, subscription, authSubject.UserID, pricingAt, reqModel, mappedModel, channelUsageFields, fs.ForceCacheBilling, body)
 			handoffInflight := inflightRelease
@@ -652,13 +718,21 @@ func (h *GatewayHandler) handleGeminiInteractionByID(c *gin.Context, method stri
 		}
 
 		if method == http.MethodDelete {
-			cleanCtx, cancelClean := context.WithTimeout(context.WithoutCancel(c.Request.Context()), geminiInteractionBindTimeout)
-			_ = h.geminiCompatService.RemoveGeminiInteractionPending(cleanCtx, interactionID)
-			cancelClean()
+			settledCtx, cancelSettled := context.WithTimeout(context.WithoutCancel(c.Request.Context()), geminiInteractionBindTimeout)
+			settled, settledErr := h.geminiCompatService.IsGeminiInteractionSettled(settledCtx, interactionID)
+			cancelSettled()
+			if settledErr == nil && settled {
+				cleanCtx, cancelClean := context.WithTimeout(context.WithoutCancel(c.Request.Context()), geminiInteractionBindTimeout)
+				_ = h.geminiCompatService.RemoveGeminiInteractionPending(cleanCtx, interactionID)
+				cancelClean()
+			}
 			return
 		}
 
 		if (method == http.MethodGet || isCancel) && result.InteractionTerminal {
+			if (result.Stream || isCancel) && !hasBillableGeminiResult(result) {
+				return
+			}
 			_ = h.settleGeminiInteractionResponse(c, reqLog, account, apiKey, subscription, authSubject.UserID, pricingAt, fs.ForceCacheBilling, interactionID, result, observedModel, false)
 		}
 		return
@@ -904,9 +978,11 @@ func (h *GatewayHandler) settleGeminiInteractionResponse(
 	}
 	service.ApplyGeminiInteractionMetaModels(result, observedModel, meta)
 	if !hasBillableGeminiResult(result) {
-		cleanCtx, cancelClean := context.WithTimeout(context.WithoutCancel(c.Request.Context()), geminiInteractionBindTimeout)
-		_ = h.geminiCompatService.RemoveGeminiInteractionPending(cleanCtx, interactionID)
-		cancelClean()
+		if !result.Stream {
+			cleanCtx, cancelClean := context.WithTimeout(context.WithoutCancel(c.Request.Context()), geminiInteractionBindTimeout)
+			_ = h.geminiCompatService.RemoveGeminiInteractionPending(cleanCtx, interactionID)
+			cancelClean()
+		}
 		return true
 	}
 
@@ -918,7 +994,10 @@ func (h *GatewayHandler) settleGeminiInteractionResponse(
 		return false
 	}
 	if !claimed {
-		return true
+		settledCtx, cancelSettled := context.WithTimeout(context.WithoutCancel(c.Request.Context()), geminiInteractionBindTimeout)
+		settled, settledErr := h.geminiCompatService.IsGeminiInteractionSettled(settledCtx, interactionID)
+		cancelSettled()
+		return settledErr == nil && settled
 	}
 
 	billingAPIKey := apiKey
@@ -1391,7 +1470,15 @@ func (h *GatewayHandler) ReconcilePendingGeminiInteractions(ctx context.Context)
 		pollCtx, cancelPoll := context.WithTimeout(ctx, geminiInteractionPollTimeout)
 		res, _, terminal, pollErr := h.geminiCompatService.FetchGeminiInteractionSnapshot(pollCtx, account, interactionID)
 		cancelPoll()
-		if pollErr != nil || !terminal {
+		if pollErr != nil {
+			if terminal {
+				remCtx, cancelRem := context.WithTimeout(ctx, geminiInteractionBindTimeout)
+				_ = h.geminiCompatService.RemoveGeminiInteractionPending(remCtx, interactionID)
+				cancelRem()
+			}
+			continue
+		}
+		if !terminal {
 			continue
 		}
 
