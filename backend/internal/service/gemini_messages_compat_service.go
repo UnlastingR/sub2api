@@ -58,14 +58,14 @@ const (
 const geminiDummyThoughtSignature = "skip_thought_signature_validator"
 
 type GeminiMessagesCompatService struct {
-	accountRepo               AccountRepository
-	groupRepo                 GroupRepository
-	cache                     GatewayCache
-	schedulerSnapshot         *SchedulerSnapshotService
-	tokenProvider             *GeminiTokenProvider
-	rateLimitService          *RateLimitService
-	httpUpstream              HTTPUpstream
-	antigravityGatewayService *AntigravityGatewayService
+	accountRepo                 AccountRepository
+	groupRepo                   GroupRepository
+	cache                       GatewayCache
+	schedulerSnapshot           *SchedulerSnapshotService
+	tokenProvider               *GeminiTokenProvider
+	rateLimitService            *RateLimitService
+	httpUpstream                HTTPUpstream
+	antigravityGatewayService   *AntigravityGatewayService
 	cfg                         *config.Config
 	responseHeaderFilter        *responseheaders.CompiledHeaderFilter
 	geminiInteractionPendingMu  sync.Mutex

@@ -255,10 +255,12 @@ func (c *gatewayCache) ListDueGeminiInteractionPending(ctx context.Context, nowU
 	if limit <= 0 {
 		limit = 50
 	}
-	return c.rdb.ZRangeByScore(ctx, geminiInteractionPendingZSetKey, &redis.ZRangeBy{
-		Min:   "-inf",
-		Max:   strconv.FormatInt(nowUnixMilli, 10),
-		Count: limit,
+	return c.rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     geminiInteractionPendingZSetKey,
+		Start:   "-inf",
+		Stop:    strconv.FormatInt(nowUnixMilli, 10),
+		ByScore: true,
+		Count:   limit,
 	}).Result()
 }
 
