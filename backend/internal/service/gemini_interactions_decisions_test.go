@@ -786,3 +786,23 @@ func TestForwardInteractionCreate_EdgeCases(t *testing.T) {
 		require.Equal(t, 1, res.ImageCount)
 	})
 }
+
+func TestGeminiInteractionBillingRequestID_BoundedAndDeterministic(t *testing.T) {
+	require.Empty(t, GeminiInteractionBillingRequestID("  "))
+
+	shortID := GeminiInteractionBillingRequestID("v1_del_settle")
+	require.Equal(t, "gemini_interaction:v1_del_settle", shortID)
+	require.LessOrEqual(t, len(shortID), 64)
+	require.True(t, isForcedUsageBillingRequestID(shortID))
+
+	longGoogleID := "v1_ChdRQ2IzYXRPdU5zMm4xTWtQdnQyUjJRSRIXUUNiM2F0T3VOczJuMU1rUHZ0MlIyUUk"
+	reqID1 := GeminiInteractionBillingRequestID(longGoogleID)
+	reqID2 := GeminiInteractionBillingRequestID(longGoogleID)
+	otherReqID := GeminiInteractionBillingRequestID(longGoogleID + "X")
+	require.Equal(t, reqID1, reqID2)
+	require.NotEqual(t, reqID1, otherReqID)
+	require.LessOrEqual(t, len(reqID1), 64)
+	require.Equal(t, 63, len(reqID1))
+	require.True(t, strings.HasPrefix(reqID1, GeminiInteractionBillingRequestIDPrefix))
+	require.True(t, isForcedUsageBillingRequestID(reqID1))
+}

@@ -1084,7 +1084,7 @@ func (h *GatewayHandler) recordGeminiInteractionUsageSync(
 	component string,
 ) error {
 	if interactionIDForRetry != "" && result != nil {
-		result.RequestID = "gemini_interaction:" + interactionIDForRetry
+		result.RequestID = service.GeminiInteractionBillingRequestID(interactionIDForRetry)
 	}
 	var user *service.User
 	if snap.apiKey != nil {
