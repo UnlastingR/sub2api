@@ -90,6 +90,10 @@ func extractProtocolSegments(protocol string, document any) []promptSegment {
 		return append(extractAnthropicSystem(root["system"]), extractMessages(root["messages"], clientInstructionRoles...)...)
 	case "gemini", "gemini_generate_content":
 		return extractGeminiRoot(root)
+	case "gemini_interactions":
+		return extractGeminiInteractions(root)
+	case "gemini_decisions":
+		return extractGeminiDecisions(root)
 	case "openai_responses", "responses", "responses_websocket":
 		if frameType := stringValue(root["type"]); frameType != "" || protocol == "responses_websocket" {
 			if frameType != "response.create" {
@@ -362,6 +366,102 @@ func extractGeminiRoot(root map[string]any) []promptSegment {
 		}
 	}
 	return result
+}
+
+func extractGeminiInteractions(root map[string]any) []promptSegment {
+	if root == nil {
+		return nil
+	}
+	result := extractGeminiSystemInstruction(root["systemInstruction"])
+	result = append(result, extractGeminiSystemInstruction(root["system_instruction"])...)
+	if input, exists := root["input"]; exists && input != nil {
+		result = append(result, extractGeminiInteractionInput(input)...)
+	} else if contents, exists := root["contents"]; exists && contents != nil {
+		result = append(result, extractGemini(contents)...)
+	}
+	return result
+}
+
+func extractGeminiInteractionInput(value any) []promptSegment {
+	switch typed := value.(type) {
+	case string:
+		if text := strings.TrimSpace(typed); text != "" {
+			return []promptSegment{{text: text, user: true, role: "user"}}
+		}
+	case []any:
+		result := make([]promptSegment, 0, len(typed))
+		for _, item := range typed {
+			result = append(result, extractGeminiInteractionInput(item)...)
+		}
+		return result
+	case map[string]any:
+		role := strings.ToLower(stringValue(typed["role"]))
+		if role != "" && !isClientInstructionRole(role) {
+			return nil
+		}
+		var result []promptSegment
+		if content, exists := typed["content"]; exists {
+			for _, text := range contentTexts(content) {
+				result = append(result, promptSegment{text: text, user: role == "" || role == "user", role: role})
+			}
+		}
+		if parts, ok := typed["parts"].([]any); ok {
+			for _, part := range parts {
+				if obj, ok := part.(map[string]any); ok {
+					if text := stringValue(obj["text"]); text != "" {
+						result = append(result, promptSegment{text: text, user: role == "" || role == "user", role: role})
+					}
+				}
+			}
+		}
+		if text := stringValue(typed["text"]); text != "" {
+			result = append(result, promptSegment{text: text, user: role == "" || role == "user", role: role})
+		}
+		return result
+	}
+	return nil
+}
+
+func extractGeminiDecisions(root map[string]any) []promptSegment {
+	if root == nil {
+		return nil
+	}
+	result := extractGeminiSystemInstruction(root["systemInstruction"])
+	result = append(result, extractGeminiSystemInstruction(root["system_instruction"])...)
+	var texts []string
+	for _, field := range sortedJSONKeys(root) {
+		switch field {
+		case "model", "stream", "systemInstruction", "system_instruction":
+			continue
+		}
+		texts = appendNonMediaStringLeaves(texts, root[field])
+	}
+	return append(result, userPromptSegments(texts)...)
+}
+
+func appendNonMediaStringLeaves(texts []string, value any) []string {
+	switch typed := value.(type) {
+	case string:
+		if looksLikeMediaPayload(typed) {
+			return texts
+		}
+		if text := strings.TrimSpace(typed); text != "" {
+			texts = append(texts, text)
+		}
+	case []any:
+		for _, item := range typed {
+			texts = appendNonMediaStringLeaves(texts, item)
+		}
+	case map[string]any:
+		hasInlineData := typed["mime_type"] != nil || typed["mimeType"] != nil
+		for _, key := range sortedJSONKeys(typed) {
+			if hasInlineData && key == "data" {
+				continue
+			}
+			texts = appendNonMediaStringLeaves(texts, typed[key])
+		}
+	}
+	return texts
 }
 
 func extractGeminiSystemInstruction(value any) []promptSegment {

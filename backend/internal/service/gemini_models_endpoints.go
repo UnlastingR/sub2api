@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/gemini"
@@ -163,11 +165,18 @@ func modelsEndpointAccountRank(a *Account) int {
 // AI Studio 兼容账号原样返回上游响应；Vertex 服务账号读取 Google 发布方模型列表后转换格式，
 // 上游非 2xx 时原样返回该响应；Vertex API Key 账号返回内置列表。
 func (s *GeminiMessagesCompatService) ForwardListModels(ctx context.Context, account *Account) (*UpstreamHTTPResult, error) {
+	return s.ForwardListModelsWithQuery(ctx, account, nil)
+}
+
+// ForwardListModelsWithQuery reads the upstream model list while forwarding
+// sanitized pagination parameters (`pageSize`, `pageToken`) for AI Studio
+// compatible accounts.
+func (s *GeminiMessagesCompatService) ForwardListModelsWithQuery(ctx context.Context, account *Account, query url.Values) (*UpstreamHTTPResult, error) {
 	if account == nil {
 		return nil, errors.New("account is nil")
 	}
 	if !account.IsVertexServiceAccount() {
-		return s.forwardGeminiModelsGET(ctx, account, "/v1beta/models")
+		return s.forwardGeminiModelsGETWithQuery(ctx, account, "/v1beta/models", sanitizedGeminiModelsListQuery(query))
 	}
 	if account.IsVertexAPIKey() {
 		return geminiModelsJSONResult(http.StatusOK, gemini.FallbackModelsList())
@@ -222,6 +231,10 @@ func (s *GeminiMessagesCompatService) ForwardGetModel(ctx context.Context, accou
 // forwardGeminiModelsGET 向 AI Studio 兼容上游转发模型接口的 GET 请求。
 // path 会被直接拼到上游 base URL 后面，因此按路径护栏逐片段校验，见 upstream_path_guard.go。
 func (s *GeminiMessagesCompatService) forwardGeminiModelsGET(ctx context.Context, account *Account, path string) (*UpstreamHTTPResult, error) {
+	return s.forwardGeminiModelsGETWithQuery(ctx, account, path, nil)
+}
+
+func (s *GeminiMessagesCompatService) forwardGeminiModelsGETWithQuery(ctx context.Context, account *Account, path string, query url.Values) (*UpstreamHTTPResult, error) {
 	sanitizedPath, ok := sanitizedUpstreamPathSuffix(path)
 	if !ok || sanitizedPath == "" {
 		return nil, errors.New("invalid path")
@@ -233,6 +246,9 @@ func (s *GeminiMessagesCompatService) forwardGeminiModelsGET(ctx context.Context
 		return nil, err
 	}
 	fullURL := strings.TrimRight(normalizedBaseURL, "/") + sanitizedPath
+	if encodedQuery := query.Encode(); encodedQuery != "" {
+		fullURL += "?" + encodedQuery
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {
@@ -341,4 +357,23 @@ func geminiModelsJSONResult(status int, payload any) (*UpstreamHTTPResult, error
 		Headers:    http.Header{"Content-Type": []string{"application/json; charset=utf-8"}},
 		Body:       body,
 	}, nil
+}
+
+func sanitizedGeminiModelsListQuery(raw url.Values) url.Values {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := url.Values{}
+	if ps := strings.TrimSpace(raw.Get("pageSize")); ps != "" {
+		if n, err := strconv.Atoi(ps); err == nil && n > 0 {
+			out.Set("pageSize", strconv.Itoa(n))
+		}
+	}
+	if pt := strings.TrimSpace(raw.Get("pageToken")); pt != "" {
+		out.Set("pageToken", pt)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

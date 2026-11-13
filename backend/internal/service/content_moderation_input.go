@@ -43,6 +43,10 @@ func extractContentModerationInput(protocol string, body []byte, filterReminders
 		collector.collectLastResponsesInput(gjson.GetBytes(body, "input"), &parts, &images)
 	case ContentModerationProtocolGemini:
 		collector.collectLastGeminiContent(gjson.GetBytes(body, "contents"), &parts, &images)
+	case ContentModerationProtocolGeminiInteractions:
+		collector.collectGeminiInteractionsInput(body, &parts, &images)
+	case ContentModerationProtocolGeminiDecisions:
+		collector.collectGeminiDecisionsInput(body, &parts, &images)
 	case ContentModerationProtocolOpenAIImages:
 		collector.addModerationText(&parts, gjson.GetBytes(body, "prompt").String())
 		collector.collectContentValue(gjson.GetBytes(body, "images"), &parts, &images)
@@ -286,6 +290,135 @@ func (collector moderationTextCollector) collectLastGeminiContent(contents gjson
 	}
 	*parts = append(*parts, candidate...)
 	*images = append(*images, candidateImages...)
+}
+
+func (collector moderationTextCollector) collectGeminiInteractionsInput(body []byte, parts *[]string, images *[]string) {
+	input := gjson.GetBytes(body, "input")
+	if !input.Exists() {
+		collector.collectLastGeminiContent(gjson.GetBytes(body, "contents"), parts, images)
+		return
+	}
+	switch {
+	case input.Type == gjson.String:
+		collector.addModerationText(parts, input.String())
+	case input.IsArray():
+		array := input.Array()
+		if len(array) == 0 {
+			return
+		}
+		hasRoles := false
+		for _, item := range array {
+			if strings.TrimSpace(item.Get("role").String()) != "" {
+				hasRoles = true
+				break
+			}
+		}
+		if hasRoles {
+			last := array[len(array)-1]
+			role := strings.ToLower(strings.TrimSpace(last.Get("role").String()))
+			if role != "" && role != "user" {
+				return
+			}
+			collector.collectGeminiInteractionValue(last, parts, images)
+			return
+		}
+		for _, item := range array {
+			collector.collectGeminiInteractionValue(item, parts, images)
+		}
+	case input.IsObject():
+		role := strings.ToLower(strings.TrimSpace(input.Get("role").String()))
+		if role != "" && role != "user" {
+			return
+		}
+		collector.collectGeminiInteractionValue(input, parts, images)
+	}
+}
+
+func (collector moderationTextCollector) collectGeminiInteractionValue(value gjson.Result, parts *[]string, images *[]string) {
+	switch {
+	case !value.Exists():
+		return
+	case value.Type == gjson.String:
+		collector.addModerationText(parts, value.String())
+	case value.IsArray():
+		value.ForEach(func(_, item gjson.Result) bool {
+			collector.collectGeminiInteractionValue(item, parts, images)
+			return true
+		})
+	case value.IsObject():
+		role := strings.ToLower(strings.TrimSpace(value.Get("role").String()))
+		if role != "" && role != "user" {
+			return
+		}
+		addModerationImage(images, value.Get("uri").String())
+		addGeminiModerationImage(images, value)
+		addModerationImage(images, value.Get("image_url.url").String())
+		addModerationImage(images, value.Get("image_url").String())
+		addModerationImage(images, value.Get("url").String())
+		addModerationImageData(images, value.Get("source.media_type").String(), value.Get("source.data").String())
+		addModerationImageData(images, value.Get("source.mediaType").String(), value.Get("source.data").String())
+		addModerationImageData(images, value.Get("media_type").String(), value.Get("data").String())
+		addModerationImageData(images, value.Get("mime_type").String(), value.Get("data").String())
+		addModerationImageData(images, value.Get("mimeType").String(), value.Get("data").String())
+		addModerationImage(images, value.Get("source.data").String())
+		addModerationImage(images, value.Get("data").String())
+		addModerationImage(images, value.Get("base64").String())
+		typ := strings.ToLower(strings.TrimSpace(value.Get("type").String()))
+		switch typ {
+		case "", "text", "input_text", "message":
+			if textField := value.Get("text"); textField.Exists() {
+				collector.addModerationText(parts, textField.String())
+			}
+		}
+		if contentField := value.Get("content"); contentField.Exists() {
+			collector.collectGeminiInteractionValue(contentField, parts, images)
+		}
+		if partsField := value.Get("parts"); partsField.Exists() {
+			collector.collectGeminiInteractionValue(partsField, parts, images)
+		}
+	}
+}
+
+func (collector moderationTextCollector) collectGeminiDecisionsInput(body []byte, parts *[]string, images *[]string) {
+	root := gjson.ParseBytes(body)
+	root.ForEach(func(field, value gjson.Result) bool {
+		switch field.String() {
+		case "model", "stream":
+			return true
+		}
+		collector.collectDecisionFieldValue(field.String(), value, parts, images)
+		return true
+	})
+}
+
+func (collector moderationTextCollector) collectDecisionFieldValue(key string, value gjson.Result, parts *[]string, images *[]string) {
+	switch {
+	case !value.Exists():
+		return
+	case value.Type == gjson.String:
+		if strings.EqualFold(key, "uri") || strings.EqualFold(key, "url") {
+			addModerationImage(images, value.String())
+			return
+		}
+		collector.addModerationText(parts, value.String())
+	case value.IsArray():
+		value.ForEach(func(_, child gjson.Result) bool {
+			collector.collectDecisionFieldValue(key, child, parts, images)
+			return true
+		})
+	case value.IsObject():
+		addModerationImage(images, value.Get("uri").String())
+		addModerationImageData(images, value.Get("mime_type").String(), value.Get("data").String())
+		addModerationImageData(images, value.Get("mimeType").String(), value.Get("data").String())
+		hasInlineData := value.Get("mime_type").Exists() || value.Get("mimeType").Exists()
+		value.ForEach(func(childKey, child gjson.Result) bool {
+			if hasInlineData && childKey.String() == "data" {
+				return true
+			}
+			collector.collectDecisionFieldValue(childKey.String(), child, parts, images)
+			return true
+		})
+	}
 }
 
 func (collector moderationTextCollector) collectContentValue(value gjson.Result, parts *[]string, images *[]string) {

@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -57,16 +58,18 @@ const (
 const geminiDummyThoughtSignature = "skip_thought_signature_validator"
 
 type GeminiMessagesCompatService struct {
-	accountRepo               AccountRepository
-	groupRepo                 GroupRepository
-	cache                     GatewayCache
-	schedulerSnapshot         *SchedulerSnapshotService
-	tokenProvider             *GeminiTokenProvider
-	rateLimitService          *RateLimitService
-	httpUpstream              HTTPUpstream
-	antigravityGatewayService *AntigravityGatewayService
-	cfg                       *config.Config
-	responseHeaderFilter      *responseheaders.CompiledHeaderFilter
+	accountRepo                 AccountRepository
+	groupRepo                   GroupRepository
+	cache                       GatewayCache
+	schedulerSnapshot           *SchedulerSnapshotService
+	tokenProvider               *GeminiTokenProvider
+	rateLimitService            *RateLimitService
+	httpUpstream                HTTPUpstream
+	antigravityGatewayService   *AntigravityGatewayService
+	cfg                         *config.Config
+	responseHeaderFilter        *responseheaders.CompiledHeaderFilter
+	geminiInteractionPendingMu  sync.Mutex
+	geminiInteractionPendingDue map[string]time.Time
 }
 
 func (s *GeminiMessagesCompatService) readUpstreamErrorBody(resp *http.Response) []byte {
@@ -3121,7 +3124,8 @@ func convertGeminiToClaudeMessage(geminiResp map[string]any, originalModel strin
 						if !ok {
 							continue
 						}
-						if text, ok := pm["text"].(string); ok && text != "" {
+						// 思考摘要不属于正文；非流式响应不输出思考内容。
+						if text, ok := pm["text"].(string); ok && text != "" && !isGeminiThoughtPart(pm) {
 							contentBlocks = append(contentBlocks, map[string]any{
 								"type": "text",
 								"text": text,

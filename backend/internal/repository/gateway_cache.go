@@ -223,6 +223,58 @@ func (c *gatewayCache) ReleaseGrokVideoBilled(ctx context.Context, key string) e
 	return c.rdb.Del(ctx, grokVideoBilledPrefix+key).Err()
 }
 
+const geminiInteractionPendingZSetKey = "gemini:interaction:pending"
+
+var _ service.GeminiInteractionPendingIndex = (*gatewayCache)(nil)
+
+func (c *gatewayCache) UpsertGeminiInteractionPending(ctx context.Context, interactionID string, nextCheckAtUnixMilli int64, ttl time.Duration) error {
+	if c == nil || c.rdb == nil {
+		return errors.New("gateway cache unavailable")
+	}
+	interactionID = strings.TrimSpace(interactionID)
+	if interactionID == "" {
+		return errors.New("invalid interaction id")
+	}
+	if ttl <= 0 {
+		ttl = 7 * 24 * time.Hour
+	}
+	pipe := c.rdb.TxPipeline()
+	pipe.ZAdd(ctx, geminiInteractionPendingZSetKey, redis.Z{
+		Score:  float64(nextCheckAtUnixMilli),
+		Member: interactionID,
+	})
+	pipe.Expire(ctx, geminiInteractionPendingZSetKey, ttl)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (c *gatewayCache) ListDueGeminiInteractionPending(ctx context.Context, nowUnixMilli int64, limit int64) ([]string, error) {
+	if c == nil || c.rdb == nil {
+		return nil, errors.New("gateway cache unavailable")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	return c.rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     geminiInteractionPendingZSetKey,
+		Start:   "-inf",
+		Stop:    strconv.FormatInt(nowUnixMilli, 10),
+		ByScore: true,
+		Count:   limit,
+	}).Result()
+}
+
+func (c *gatewayCache) RemoveGeminiInteractionPending(ctx context.Context, interactionID string) error {
+	if c == nil || c.rdb == nil {
+		return errors.New("gateway cache unavailable")
+	}
+	interactionID = strings.TrimSpace(interactionID)
+	if interactionID == "" {
+		return nil
+	}
+	return c.rdb.ZRem(ctx, geminiInteractionPendingZSetKey, interactionID).Err()
+}
+
 // Compile-time assertion: gatewayCache must implement CyberSessionBlockStore.
 var _ service.CyberSessionBlockStore = (*gatewayCache)(nil)
 var _ service.LiveCallStore = (*gatewayCache)(nil)

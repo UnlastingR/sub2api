@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -60,6 +61,9 @@ type GatewayHandler struct {
 	maxAccountSwitchesGemini   int
 	cfg                        *config.Config
 	settingService             *service.SettingService
+	geminiReconcileOnce        sync.Once
+	geminiReconcileStopOnce    sync.Once
+	geminiReconcileStop        chan struct{}
 }
 
 // NewGatewayHandler creates a new GatewayHandler
@@ -99,7 +103,7 @@ func NewGatewayHandler(
 		umqHelper = NewUserMsgQueueHelper(userMsgQueueService, SSEPingFormatClaude, pingInterval)
 	}
 
-	return &GatewayHandler{
+	h := &GatewayHandler{
 		gatewayService:            gatewayService,
 		openAIGatewayService:      openAIGatewayService,
 		geminiCompatService:       geminiCompatService,
@@ -118,6 +122,10 @@ func NewGatewayHandler(
 		cfg:                       cfg,
 		settingService:            settingService,
 	}
+	if gatewayService != nil && geminiCompatService != nil && usageRecordWorkerPool != nil {
+		h.startGeminiInteractionPendingSweeper()
+	}
+	return h
 }
 
 // Messages handles Claude API compatible messages endpoint

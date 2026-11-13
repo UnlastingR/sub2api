@@ -360,6 +360,12 @@ func RegisterGatewayRoutes(
 		gemini.GET("/cachedContents/:cacheID", h.Gateway.GeminiCachedContentsGet)
 		gemini.PATCH("/cachedContents/:cacheID", h.Gateway.GeminiCachedContentsPatch)
 		gemini.DELETE("/cachedContents/:cacheID", h.Gateway.GeminiCachedContentsDelete)
+		// Interactions API & Decisions API（Google AI Studio 原生端点）
+		gemini.POST("/interactions", h.Gateway.GeminiV1BetaInteractionsCreate)
+		gemini.GET("/interactions/:interactionID", h.Gateway.GeminiV1BetaInteractionsGet)
+		gemini.POST("/interactions/:interactionID/cancel", h.Gateway.GeminiV1BetaInteractionsCancel)
+		gemini.DELETE("/interactions/:interactionID", h.Gateway.GeminiV1BetaInteractionsDelete)
+		gemini.POST("/decisions", h.Gateway.GeminiV1BetaDecisions)
 	}
 
 	// OpenAI Responses API（不带v1前缀的别名）— auto-route based on group platform
@@ -624,6 +630,18 @@ func compositeGeminiTargetPlatformMiddleware(resolver *service.CompositeRouteRes
 		apiKey, ok := middleware.GetAPIKeyFromContext(c)
 		if ok && apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite {
 			model := compositeGeminiModelFromParams(c)
+			if model == "" && c.Request != nil && c.Request.Method == http.MethodPost {
+				body, readErr := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
+				if readErr != nil {
+					if middleware.RejectRequestBodyReadError(c, "middleware.composite_gemini_route", readErr) {
+						return
+					}
+					middleware.AbortWithRequestBodyReadFailure(c, "middleware.composite_gemini_route", readErr)
+					return
+				}
+				model = service.ExtractGeminiAIStudioBodyModel(c.FullPath(), body)
+				requestmodel.ResetRequestBody(c.Request, body)
+			}
 			if model != "" {
 				decision, err := resolver.Resolve(c.Request.Context(), apiKey.Group.ID, model, service.CompositeRouteEndpointGemini)
 				if err != nil {

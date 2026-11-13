@@ -33,6 +33,8 @@ const (
 	EndpointSeedanceTasks        = "/api/v3/contents/generations/tasks"
 	EndpointGeminiModels         = "/v1beta/models"
 	EndpointGeminiCachedContents = "/v1beta/cachedContents"
+	EndpointGeminiInteractions   = "/v1beta/interactions"
+	EndpointGeminiDecisions      = "/v1beta/decisions"
 )
 
 const EndpointAntigravityGenerateContent = "/v1internal:streamGenerateContent"
@@ -121,6 +123,10 @@ func NormalizeInboundEndpoint(path string) string {
 		return EndpointGeminiModels
 	case strings.Contains(path, EndpointGeminiCachedContents):
 		return EndpointGeminiCachedContents
+	case strings.Contains(path, EndpointGeminiInteractions):
+		return EndpointGeminiInteractions
+	case strings.Contains(path, EndpointGeminiDecisions):
+		return EndpointGeminiDecisions
 	default:
 		return path
 	}
@@ -234,10 +240,12 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 		return EndpointSystemOne
 
 	case service.PlatformGemini:
-		if inbound == EndpointGeminiCachedContents {
-			return EndpointGeminiCachedContents
+		switch inbound {
+		case EndpointGeminiCachedContents, EndpointGeminiInteractions, EndpointGeminiDecisions:
+			return inbound
+		default:
+			return EndpointGeminiModels
 		}
-		return EndpointGeminiModels
 
 	case service.PlatformAntigravity:
 		// Antigravity accounts serve both Claude and Gemini.

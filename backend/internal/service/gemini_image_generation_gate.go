@@ -57,8 +57,11 @@ func geminiRequestAsksForImageOutput(body []byte) bool {
 	}
 	found := false
 	gjson.ParseBytes(body).ForEach(func(key, config gjson.Result) bool {
-		if key.Str == "generationConfig" || key.Str == "generation_config" {
+		switch key.Str {
+		case "generationConfig", "generation_config":
 			found = geminiGenerationConfigAsksForImage(config)
+		case "responseModalities", "response_modalities":
+			found = geminiModalitiesContainImage(config)
 		}
 		return !found
 	})

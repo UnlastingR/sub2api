@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -205,4 +206,24 @@ func TestForwardListModels_ResponseOverReadLimitFails(t *testing.T) {
 
 	_, err := svc.ForwardListModels(context.Background(), account)
 	require.ErrorContains(t, err, "exceeds 16 bytes")
+}
+
+func TestForwardListModelsWithQuery_ForwardsPaginationAndFiltersUntrustedParams(t *testing.T) {
+	upstream := &httpUpstreamRecorder{resp: vertexModelsJSONResponse(http.StatusOK, `{"models":[{"name":"models/gemini-3.5-flash-lite"}],"nextPageToken":"tok-2"}`)}
+	svc := newGeminiModelsEndpointsTestService(nil, upstream)
+	account := &Account{ID: 262, Platform: PlatformGemini, Type: AccountTypeAPIKey, Credentials: map[string]any{
+		"api_key":  "sk-pool",
+		"base_url": "https://relay.example.com",
+	}}
+
+	query := url.Values{
+		"pageSize":  []string{"1000"},
+		"pageToken": []string{"tok-1"},
+		"key":       []string{"attacker-key"},
+		"alt":       []string{"sse"},
+	}
+	res, err := svc.ForwardListModelsWithQuery(context.Background(), account, query)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, "https://relay.example.com/v1beta/models?pageSize=1000&pageToken=tok-1", upstream.lastReq.URL.String())
 }
