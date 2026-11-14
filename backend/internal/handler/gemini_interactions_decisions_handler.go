@@ -1428,6 +1428,10 @@ func (h *GatewayHandler) ReconcilePendingGeminiInteractions(ctx context.Context)
 	}
 
 	for _, interactionID := range ids {
+		if batchID, isBatch := strings.CutPrefix(interactionID, "batch:"); isBatch {
+			h.reconcilePendingGeminiBatch(ctx, batchID)
+			continue
+		}
 		settledCtx, cancelSettled := context.WithTimeout(ctx, geminiInteractionBindTimeout)
 		settled, settledErr := h.geminiCompatService.IsGeminiInteractionSettled(settledCtx, interactionID)
 		cancelSettled()

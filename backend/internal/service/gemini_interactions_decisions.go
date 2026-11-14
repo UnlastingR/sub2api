@@ -168,7 +168,7 @@ func (s *GatewayService) GeminiAIStudioEndpointExclusions(ctx context.Context, g
 }
 
 // ExtractGeminiAIStudioBodyModel extracts the requested model identifier from an AI Studio
-// endpoint JSON payload, falling back to `agent` on /v1beta/interactions requests.
+// endpoint JSON payload, supporting both snake_case and camelCase extension payloads.
 func ExtractGeminiAIStudioBodyModel(routePath string, body []byte) string {
 	if !gjson.ValidBytes(body) {
 		return ""
@@ -176,8 +176,27 @@ func ExtractGeminiAIStudioBodyModel(routePath string, body []byte) string {
 	if model := strings.TrimSpace(gjson.GetBytes(body, "model").String()); model != "" {
 		return model
 	}
+	keys := []string{
+		"agent_config.model",
+		"agentConfig.model",
+		"config.model",
+		"base_agent",
+		"baseAgent",
+		"agent",
+		"interaction.model",
+		"interaction.agent_config.model",
+		"interaction.agentConfig.model",
+		"interaction.agent",
+		"bidi_generate_content_setup.model",
+		"bidiGenerateContentSetup.model",
+	}
 	if strings.Contains(routePath, "/interactions") {
-		return strings.TrimSpace(gjson.GetBytes(body, "agent").String())
+		keys = []string{"agent", "agent_config.model", "agentConfig.model"}
+	}
+	for _, key := range keys {
+		if v := strings.TrimSpace(gjson.GetBytes(body, key).String()); v != "" {
+			return v
+		}
 	}
 	return ""
 }
@@ -470,7 +489,7 @@ func (s *GeminiMessagesCompatService) ForwardInteractionCreate(
 		return nil, "", s.writeGoogleError(c, http.StatusBadRequest, ImageGenerationPermissionMessage())
 	}
 	upstreamBody := rewriteGeminiAIStudioBodyModel(body, mappedModel)
-	res, interactionID, _, err := s.forwardGeminiAIStudioEndpoint(ctx, c, account, geminiAIStudioForwardSpec{
+	res, interactionID, observedModel, err := s.forwardGeminiAIStudioEndpoint(ctx, c, account, geminiAIStudioForwardSpec{
 		Method:          http.MethodPost,
 		Path:            "/v1beta/interactions",
 		Body:            upstreamBody,
@@ -480,6 +499,12 @@ func (s *GeminiMessagesCompatService) ForwardInteractionCreate(
 		ExtractUsage:    extractGeminiInteractionUsage,
 		OnInteractionID: onInteractionID,
 	})
+	if err == nil && res != nil && observedModel == "" && mappedModel == originalModel {
+		if agentCfgModel := strings.TrimSpace(gjson.GetBytes(body, "agent_config.model").String()); agentCfgModel != "" &&
+			strings.TrimSpace(gjson.GetBytes(body, "model").String()) == "" {
+			res.UpstreamModel = agentCfgModel
+		}
+	}
 	return res, interactionID, err
 }
 
@@ -512,15 +537,17 @@ func (s *GeminiMessagesCompatService) ForwardInteractionByID(
 }
 
 type geminiAIStudioForwardSpec struct {
-	Method          string
-	Path            string
-	Query           url.Values
-	Body            []byte
-	Stream          bool
-	OriginalModel   string
-	MappedModel     string
-	ExtractUsage    func([]byte) *ClaudeUsage
-	OnInteractionID func(string)
+	Method                string
+	Path                  string
+	Query                 url.Values
+	Body                  []byte
+	Stream                bool
+	OriginalModel         string
+	MappedModel           string
+	ExtractUsage          func([]byte) *ClaudeUsage
+	OnInteractionID       func(string)
+	TransformResponseJSON func([]byte) ([]byte, error)
+	OnResponseJSON        func([]byte)
 }
 
 func (s *GeminiMessagesCompatService) forwardGeminiAIStudioEndpoint(
@@ -693,6 +720,13 @@ func (s *GeminiMessagesCompatService) forwardGeminiAIStudioEndpoint(
 		if readErr != nil {
 			return nil, "", "", readErr
 		}
+		if spec.TransformResponseJSON != nil {
+			transformed, tfErr := spec.TransformResponseJSON(respBody)
+			if tfErr != nil {
+				return nil, "", "", s.writeGoogleError(c, http.StatusBadGateway, "Failed to transform upstream response")
+			}
+			respBody = transformed
+		}
 		interactionID = extractGeminiInteractionID(respBody)
 		if interactionID != "" && spec.OnInteractionID != nil {
 			spec.OnInteractionID(interactionID)
@@ -723,6 +757,9 @@ func (s *GeminiMessagesCompatService) forwardGeminiAIStudioEndpoint(
 		}
 		if spec.ExtractUsage != nil {
 			usage = spec.ExtractUsage(respBody)
+		}
+		if spec.OnResponseJSON != nil {
+			spec.OnResponseJSON(respBody)
 		}
 	}
 
@@ -855,41 +892,54 @@ func (s *GeminiMessagesCompatService) buildGeminiAIStudioEndpointRequest(
 	if spec.Stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
+	if err := s.setGeminiAIStudioAuthHeaders(ctx, account, req.Header); err != nil {
+		return nil, err
+	}
+	return req, nil
+}
 
+func (s *GeminiMessagesCompatService) setGeminiAIStudioAuthHeaders(
+	ctx context.Context,
+	account *Account,
+	header http.Header,
+) error {
+	if account == nil || header == nil {
+		return errors.New("gemini account or headers missing")
+	}
 	switch account.Type {
 	case AccountTypeAPIKey:
 		apiKey := strings.TrimSpace(account.GetCredential("api_key"))
 		if apiKey == "" {
-			return nil, errors.New("gemini api_key not configured")
+			return errors.New("gemini api_key not configured")
 		}
-		req.Header.Set("x-goog-api-key", apiKey)
+		header.Set("x-goog-api-key", apiKey)
+		return nil
 	case AccountTypeOAuth:
 		if s.tokenProvider == nil {
-			return nil, errors.New("gemini token provider not configured")
+			return errors.New("gemini token provider not configured")
 		}
 		accessToken, err := s.tokenProvider.GetAccessToken(ctx, account)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		req.Header.Set("Authorization", "Bearer "+accessToken)
+		header.Set("Authorization", "Bearer "+accessToken)
+		return nil
 	default:
-		return nil, fmt.Errorf("unsupported account type: %s", account.Type)
+		return fmt.Errorf("unsupported account type: %s", account.Type)
 	}
-	return req, nil
 }
 
 func isAllowedGeminiAIStudioEndpointPath(path string) bool {
 	if path == "/v1beta/decisions" || path == "/v1beta/interactions" {
 		return true
 	}
-	rest, ok := strings.CutPrefix(path, "/v1beta/interactions/")
-	if !ok || rest == "" {
-		return false
+	if rest, ok := strings.CutPrefix(path, "/v1beta/interactions/"); ok && rest != "" {
+		if id, isCancel := strings.CutSuffix(rest, "/cancel"); isCancel {
+			return IsSafeGeminiInteractionID(id)
+		}
+		return IsSafeGeminiInteractionID(rest)
 	}
-	if id, isCancel := strings.CutSuffix(rest, "/cancel"); isCancel {
-		return IsSafeGeminiInteractionID(id)
-	}
-	return IsSafeGeminiInteractionID(rest)
+	return isAllowedGeminiAIStudioExtensionPath(path)
 }
 
 func sanitizedGeminiInteractionQuery(raw url.Values) url.Values {

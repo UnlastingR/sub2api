@@ -31,6 +31,18 @@ var DefaultModels = []Model{
 	{ID: "gemini-4-carbon", Type: "model", DisplayName: "Gemini 4 Carbon", CreatedAt: ""},
 	{ID: "gemini-4-hydrogen", Type: "model", DisplayName: "Gemini 4 Hydrogen", CreatedAt: ""},
 	{ID: "gemini-decision-1", Type: "model", DisplayName: "Gemini Decision 1", CreatedAt: ""},
+	{ID: "gemini-2.5-computer-use-preview", Type: "model", DisplayName: "Gemini 2.5 Computer Use Preview", CreatedAt: ""},
+	{ID: "gemini-2.5-computer-use-preview-10-2025", Type: "model", DisplayName: "Gemini 2.5 Computer Use Preview (10-2025)", CreatedAt: ""},
+	{ID: "gemini-robotics-er-1.6-preview", Type: "model", DisplayName: "Gemini Robotics ER 1.6 Preview", CreatedAt: ""},
+	{ID: "gemini-robotics-er-2-preview", Type: "model", DisplayName: "Gemini Robotics ER 2 Preview", CreatedAt: ""},
+	{ID: "gemini-robotics-er-2-streaming-preview", Type: "model", DisplayName: "Gemini Robotics ER 2 Streaming Preview", CreatedAt: ""},
+	{ID: "gemini-3.8-live", Type: "model", DisplayName: "Gemini 3.8 Live", CreatedAt: ""},
+	{ID: "gemini-3.8-live-extended-thinking", Type: "model", DisplayName: "Gemini 3.8 Live (Extended Thinking)", CreatedAt: ""},
+	{ID: "gemini-3.5-live-translate-preview", Type: "model", DisplayName: "Gemini 3.5 Live Translate Preview", CreatedAt: ""},
+	{ID: "gemini-3.5-transcribe-live", Type: "model", DisplayName: "Gemini 3.5 Transcribe Live", CreatedAt: ""},
+	{ID: "antigravity-preview-09-2026", Type: "model", DisplayName: "Antigravity Preview (09-2026)", CreatedAt: ""},
+	{ID: "deep-research-preview-04-2026", Type: "model", DisplayName: "Deep Research Preview (04-2026)", CreatedAt: ""},
+	{ID: "deep-research-max-preview-04-2026", Type: "model", DisplayName: "Deep Research Max Preview (04-2026)", CreatedAt: ""},
 }
 
 // GoogleOneModels is the conservative model set exposed for legacy Google One

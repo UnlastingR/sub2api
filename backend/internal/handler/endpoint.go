@@ -15,26 +15,36 @@ import (
 // ──────────────────────────────────────────────────────────
 
 const (
-	EndpointMessages             = "/v1/messages"
-	EndpointSystemOne            = "/v1/systemone"
-	EndpointChatCompletions      = "/v1/chat/completions"
-	EndpointEmbeddings           = "/v1/embeddings"
-	EndpointAlphaSearch          = "/v1/alpha/search"
-	EndpointResponses            = "/v1/responses"
-	EndpointResponsesCompact     = "/v1/responses/compact"
-	EndpointResponsesInputTokens = "/v1/responses/input_tokens"
-	EndpointImagesGenerations    = "/v1/images/generations"
-	EndpointImagesEdits          = "/v1/images/edits"
-	EndpointImageTasks           = "/v1/images/tasks"
-	EndpointVideosGenerations    = "/v1/videos/generations"
-	EndpointVideosEdits          = "/v1/videos/edits"
-	EndpointVideosExtensions     = "/v1/videos/extensions"
-	EndpointVideos               = "/v1/videos"
-	EndpointSeedanceTasks        = "/api/v3/contents/generations/tasks"
-	EndpointGeminiModels         = "/v1beta/models"
-	EndpointGeminiCachedContents = "/v1beta/cachedContents"
-	EndpointGeminiInteractions   = "/v1beta/interactions"
-	EndpointGeminiDecisions      = "/v1beta/decisions"
+	EndpointMessages               = "/v1/messages"
+	EndpointSystemOne              = "/v1/systemone"
+	EndpointChatCompletions        = "/v1/chat/completions"
+	EndpointEmbeddings             = "/v1/embeddings"
+	EndpointAlphaSearch            = "/v1/alpha/search"
+	EndpointResponses              = "/v1/responses"
+	EndpointResponsesCompact       = "/v1/responses/compact"
+	EndpointResponsesInputTokens   = "/v1/responses/input_tokens"
+	EndpointImagesGenerations      = "/v1/images/generations"
+	EndpointImagesEdits            = "/v1/images/edits"
+	EndpointImageTasks             = "/v1/images/tasks"
+	EndpointVideosGenerations      = "/v1/videos/generations"
+	EndpointVideosEdits            = "/v1/videos/edits"
+	EndpointVideosExtensions       = "/v1/videos/extensions"
+	EndpointVideos                 = "/v1/videos"
+	EndpointSeedanceTasks          = "/api/v3/contents/generations/tasks"
+	EndpointGeminiModels           = "/v1beta/models"
+	EndpointGeminiCachedContents   = "/v1beta/cachedContents"
+	EndpointGeminiInteractions     = "/v1beta/interactions"
+	EndpointGeminiDecisions        = "/v1beta/decisions"
+	EndpointGeminiAgents           = "/v1beta/agents"
+	EndpointGeminiEnvironments     = "/v1beta/environments"
+	EndpointGeminiCredentials      = "/v1beta/credentials"
+	EndpointGeminiTriggers         = "/v1beta/triggers"
+	EndpointGeminiWebhooks         = "/v1beta/webhooks"
+	EndpointGeminiAuthTokens       = "/v1beta/auth_tokens"
+	EndpointGeminiFiles            = "/v1beta/files"
+	EndpointGeminiFileSearchStores = "/v1beta/fileSearchStores"
+	EndpointGeminiBatches          = "/v1beta/batches"
+	EndpointGeminiLiveWS           = "/v1beta/live"
 )
 
 const EndpointAntigravityGenerateContent = "/v1internal:streamGenerateContent"
@@ -127,6 +137,31 @@ func NormalizeInboundEndpoint(path string) string {
 		return EndpointGeminiInteractions
 	case strings.Contains(path, EndpointGeminiDecisions):
 		return EndpointGeminiDecisions
+	case strings.Contains(path, EndpointGeminiAgents):
+		return EndpointGeminiAgents
+	case strings.Contains(path, EndpointGeminiEnvironments),
+		strings.Contains(path, "/upload/v1beta/environments"):
+		return EndpointGeminiEnvironments
+	case strings.Contains(path, EndpointGeminiCredentials):
+		return EndpointGeminiCredentials
+	case strings.Contains(path, EndpointGeminiTriggers):
+		return EndpointGeminiTriggers
+	case strings.Contains(path, EndpointGeminiWebhooks):
+		return EndpointGeminiWebhooks
+	case strings.Contains(path, EndpointGeminiAuthTokens):
+		return EndpointGeminiAuthTokens
+	case strings.Contains(path, EndpointGeminiFiles),
+		strings.Contains(path, "/upload/v1beta/files"),
+		strings.Contains(path, "/download/v1beta/files"):
+		return EndpointGeminiFiles
+	case strings.Contains(path, EndpointGeminiFileSearchStores),
+		strings.Contains(path, "/upload/v1beta/fileSearchStores"):
+		return EndpointGeminiFileSearchStores
+	case strings.Contains(path, EndpointGeminiBatches):
+		return EndpointGeminiBatches
+	case strings.Contains(path, EndpointGeminiLiveWS),
+		strings.HasPrefix(path, "/ws/google.ai.generativelanguage."):
+		return EndpointGeminiLiveWS
 	default:
 		return path
 	}
@@ -241,7 +276,19 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 
 	case service.PlatformGemini:
 		switch inbound {
-		case EndpointGeminiCachedContents, EndpointGeminiInteractions, EndpointGeminiDecisions:
+		case EndpointGeminiCachedContents,
+			EndpointGeminiInteractions,
+			EndpointGeminiDecisions,
+			EndpointGeminiAgents,
+			EndpointGeminiEnvironments,
+			EndpointGeminiCredentials,
+			EndpointGeminiTriggers,
+			EndpointGeminiWebhooks,
+			EndpointGeminiAuthTokens,
+			EndpointGeminiFiles,
+			EndpointGeminiFileSearchStores,
+			EndpointGeminiBatches,
+			EndpointGeminiLiveWS:
 			return inbound
 		default:
 			return EndpointGeminiModels

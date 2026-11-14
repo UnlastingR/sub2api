@@ -149,7 +149,11 @@ func groupModelAllowlistErrorWriter(c *gin.Context) GatewayErrorWriter {
 		path = c.Request.URL.Path
 	}
 	switch {
-	case strings.HasPrefix(path, "/v1beta") || strings.HasPrefix(path, "/antigravity/v1beta"):
+	case strings.HasPrefix(path, "/v1beta") ||
+		strings.HasPrefix(path, "/antigravity/v1beta") ||
+		strings.HasPrefix(path, "/upload/v1beta") ||
+		strings.HasPrefix(path, "/download/v1beta") ||
+		strings.HasPrefix(path, "/ws/google.ai.generativelanguage."):
 		return GoogleErrorWriter
 	case strings.Contains(path, "/messages"):
 		return AnthropicErrorWriter

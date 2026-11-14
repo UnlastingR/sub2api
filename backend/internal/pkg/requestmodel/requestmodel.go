@@ -43,6 +43,13 @@ func isInteractionsRoute(routePath string) bool {
 	return strings.Contains(strings.TrimSpace(routePath), "/interactions")
 }
 
+func isGeminiAgentOrTriggerRoute(routePath string) bool {
+	trimmed := strings.TrimSpace(routePath)
+	return strings.Contains(trimmed, "/agents") ||
+		strings.Contains(trimmed, "/triggers") ||
+		strings.Contains(trimmed, "/auth_tokens")
+}
+
 // FromBodyCandidates 按入口返回所有可被下游解析器绑定的模型值：
 // Live 入口取 session 候选（为空回落顶层候选），Interactions 入口同时收集
 // 顶层 model 与 agent 候选，其余入口取顶层候选（为空回落 session 候选）。
@@ -58,7 +65,26 @@ func FromBodyCandidates(routePath, contentType string, body []byte) []string {
 	} else {
 		topLevel = jsonModelCandidates(body)
 		if isInteractionsRoute(routePath) {
-			agents = jsonKeyCandidates(body, "agent")
+			root := gjson.ParseBytes(body)
+			agents = append(jsonKeyCandidates(body, "agent"), jsonPathCandidates(root, []string{"agent_config", "model"})...)
+			agents = append(agents, jsonPathCandidates(root, []string{"agentConfig", "model"})...)
+		} else if isGeminiAgentOrTriggerRoute(routePath) {
+			for _, key := range []string{
+				"agent",
+				"base_agent",
+				"baseAgent",
+				"agent_config.model",
+				"agentConfig.model",
+				"config.model",
+				"interaction.model",
+				"interaction.agent",
+				"interaction.agent_config.model",
+				"interaction.agentConfig.model",
+				"bidi_generate_content_setup.model",
+				"bidiGenerateContentSetup.model",
+			} {
+				agents = append(agents, jsonPathCandidates(gjson.ParseBytes(body), strings.Split(key, "."))...)
+			}
 		}
 		session = jsonSessionModelCandidates(body)
 	}
@@ -69,7 +95,7 @@ func FromBodyCandidates(routePath, contentType string, body []byte) []string {
 		}
 		return topLevel
 	}
-	if isInteractionsRoute(routePath) {
+	if isInteractionsRoute(routePath) || isGeminiAgentOrTriggerRoute(routePath) {
 		combined := make([]string, 0, len(topLevel)+len(agents))
 		combined = append(combined, topLevel...)
 		combined = append(combined, agents...)
@@ -121,7 +147,25 @@ func JSONModelPathForRoute(routePath string, body []byte) (string, string) {
 		return jsonModelWithPaths(body, []string{"session.model", "model"})
 	}
 	if isInteractionsRoute(routePath) {
-		return jsonModelWithPaths(body, []string{"model", "agent", "session.model"})
+		return jsonModelWithPaths(body, []string{"model", "agent", "agent_config.model", "agentConfig.model", "session.model"})
+	}
+	if isGeminiAgentOrTriggerRoute(routePath) {
+		return jsonModelWithPaths(body, []string{
+			"model",
+			"agent_config.model",
+			"agentConfig.model",
+			"config.model",
+			"base_agent",
+			"baseAgent",
+			"agent",
+			"interaction.model",
+			"interaction.agent_config.model",
+			"interaction.agentConfig.model",
+			"interaction.agent",
+			"bidi_generate_content_setup.model",
+			"bidiGenerateContentSetup.model",
+			"session.model",
+		})
 	}
 	return jsonModelWithPaths(body, []string{"model", "session.model"})
 }
@@ -146,13 +190,28 @@ func jsonModelCandidates(body []byte) []string {
 }
 
 func jsonKeyCandidates(body []byte, targetKey string) []string {
+	return jsonPathCandidates(gjson.ParseBytes(body), []string{targetKey})
+}
+
+func jsonPathCandidates(node gjson.Result, segments []string) []string {
+	if len(segments) == 0 || !node.Exists() {
+		return nil
+	}
+	target := segments[0]
 	var out []string
-	gjson.ParseBytes(body).ForEach(func(key, value gjson.Result) bool {
-		if value.Type == gjson.String && strings.EqualFold(key.String(), targetKey) {
-			if trimmed := strings.TrimSpace(value.String()); trimmed != "" {
-				out = append(out, trimmed)
-			}
+	node.ForEach(func(key, value gjson.Result) bool {
+		if !strings.EqualFold(key.String(), target) {
+			return true
 		}
+		if len(segments) == 1 {
+			if value.Type == gjson.String {
+				if trimmed := strings.TrimSpace(value.String()); trimmed != "" {
+					out = append(out, trimmed)
+				}
+			}
+			return true
+		}
+		out = append(out, jsonPathCandidates(value, segments[1:])...)
 		return true
 	})
 	return out

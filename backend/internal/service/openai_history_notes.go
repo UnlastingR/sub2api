@@ -77,14 +77,9 @@ func (s *OpenAIGatewayService) ForwardCodexHistoryNotes(
 		return nil, fmt.Errorf("context.session_id is required")
 	}
 
-	sessionHash, legacyHash := deriveOpenAISessionHashes(clientSessionID)
-	lookupCtx := withOpenAILegacySessionHash(ctx, legacyHash)
-	accountID, err := s.getStickySessionAccountID(lookupCtx, groupID, sessionHash)
+	accountID, err := s.codexHistoryNotesStickyAccountID(ctx, groupID, clientSessionID)
 	if err != nil {
-		return nil, fmt.Errorf("resolve sticky Codex account: %w", err)
-	}
-	if accountID <= 0 {
-		return nil, ErrCodexHistoryNotesSessionUnbound
+		return nil, err
 	}
 
 	account, err := s.accountRepo.GetByID(ctx, accountID)
@@ -142,6 +137,22 @@ func (s *OpenAIGatewayService) ForwardCodexHistoryNotes(
 		Header:     resp.Header.Clone(),
 		Body:       respBody,
 	}, nil
+}
+
+// codexHistoryNotesStickyAccountID distinguishes a missing sticky binding
+// from a genuine cache failure, so a new thread's thread_hint can return
+// an empty hint while Redis outages remain visible.
+func (s *OpenAIGatewayService) codexHistoryNotesStickyAccountID(ctx context.Context, groupID *int64, clientSessionID string) (int64, error) {
+	sessionHash, legacyHash := deriveOpenAISessionHashes(clientSessionID)
+	lookupCtx := withOpenAILegacySessionHash(ctx, legacyHash)
+	accountID, err := s.getStickySessionAccountID(lookupCtx, groupID, sessionHash)
+	if errors.Is(err, ErrStickySessionNotFound) || (err == nil && accountID <= 0) {
+		return 0, ErrCodexHistoryNotesSessionUnbound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("resolve sticky Codex account: %w", err)
+	}
+	return accountID, nil
 }
 
 func rewriteCodexHistoryNotesSessionID(

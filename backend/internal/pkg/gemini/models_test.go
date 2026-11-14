@@ -41,3 +41,25 @@ func TestHasFallbackModel_RecognizesCustomtoolsModel(t *testing.T) {
 		t.Fatalf("did not expect unknown model to exist in fallback catalog")
 	}
 }
+
+func TestFallbackModel_PreservesDeclaredGenerationMethods(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, method string
+	}{
+		{"gemini-3.8-live", "bidiGenerateContent"},
+		{"models/deep-research-preview-04-2026", "interactions"},
+		{"gemini-embedding-2", "embedContent"},
+	} {
+		got := FallbackModel(tc.name)
+		found := false
+		for _, method := range got.SupportedGenerationMethods {
+			if method == tc.method {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: expected method %s, got %v", tc.name, tc.method, got.SupportedGenerationMethods)
+		}
+	}
+}

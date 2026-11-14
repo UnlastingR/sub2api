@@ -352,19 +352,46 @@ func extractGeminiRoot(root map[string]any) []promptSegment {
 	result = append(result, extractGemini(root["contents"])...)
 	result = append(result, extractGemini(root["content"])...)
 	result = append(result, extractGeminiInstances(root["instances"])...)
-	if requests, ok := root["requests"].([]any); ok {
-		for _, item := range requests {
-			request, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			result = append(result, extractGeminiSystemInstruction(request["systemInstruction"])...)
-			result = append(result, extractGeminiSystemInstruction(request["system_instruction"])...)
-			result = append(result, extractGemini(request["contents"])...)
-			result = append(result, extractGemini(request["content"])...)
-			result = append(result, extractGeminiInstances(request["instances"])...)
+	result = append(result, extractGeminiRequestList(root["requests"])...)
+	for _, cfgKey := range []string{"batch", "inputConfig", "input_config"} {
+		if cfg, ok := root[cfgKey].(map[string]any); ok {
+			result = append(result, extractGeminiBatchConfig(cfg)...)
 		}
 	}
+	return result
+}
+
+func extractGeminiRequestList(val any) []promptSegment {
+	requests, ok := val.([]any)
+	if !ok {
+		return nil
+	}
+	var result []promptSegment
+	for _, item := range requests {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if nested, ok := m["request"].(map[string]any); ok {
+			result = append(result, extractGeminiRoot(nested)...)
+			continue
+		}
+		result = append(result, extractGeminiRoot(m)...)
+	}
+	return result
+}
+
+func extractGeminiBatchConfig(node map[string]any) []promptSegment {
+	var result []promptSegment
+	for _, cfgKey := range []string{"inputConfig", "input_config"} {
+		if cfg, ok := node[cfgKey].(map[string]any); ok {
+			result = append(result, extractGeminiBatchConfig(cfg)...)
+		}
+	}
+	if reqObj, ok := node["requests"].(map[string]any); ok {
+		result = append(result, extractGeminiRequestList(reqObj["requests"])...)
+	}
+	result = append(result, extractGeminiRequestList(node["requests"])...)
 	return result
 }
 

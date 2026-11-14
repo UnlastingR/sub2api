@@ -255,6 +255,8 @@ type LiteLLMModelPricing struct {
 	OutputCostPerImage                  float64 `json:"output_cost_per_image"`       // 图片生成模型每张图片价格
 	OutputCostPerImageToken             float64 `json:"output_cost_per_image_token"` // 图片输出 token 价格
 	InputCostPerImageToken              float64 `json:"input_cost_per_image_token"`  // 图片输入 token 价格（如 gpt-image-2 图片编辑）
+	InputCostPerAudioToken              float64 `json:"input_cost_per_audio_token"`  // 音频输入 token 价格
+	OutputCostPerAudioToken             float64 `json:"output_cost_per_audio_token"` // 音频输出 token 价格
 	CacheReadInputImageTokenCost        float64 `json:"cache_read_input_image_token_cost"`
 	// CacheStorageCostPerTokenPerHour 显式上下文缓存存储单价（每 token 每小时，USD），一般由定价覆盖文件提供，
 	// 配置后优先于内置价（见 BillingService.CacheStoragePricePerTokenHour）。
@@ -293,6 +295,8 @@ type LiteLLMRawEntry struct {
 	OutputCostPerImage                  *float64 `json:"output_cost_per_image"`
 	OutputCostPerImageToken             *float64 `json:"output_cost_per_image_token"`
 	InputCostPerImageToken              *float64 `json:"input_cost_per_image_token"`
+	InputCostPerAudioToken              *float64 `json:"input_cost_per_audio_token"`
+	OutputCostPerAudioToken             *float64 `json:"output_cost_per_audio_token"`
 	CacheReadInputImageTokenCost        *float64 `json:"cache_read_input_image_token_cost"`
 	CacheStorageCostPerTokenPerHour     *float64 `json:"cache_storage_cost_per_token_per_hour"`
 }
@@ -763,6 +767,12 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 		}
 		if entry.InputCostPerImageToken != nil {
 			pricing.InputCostPerImageToken = *entry.InputCostPerImageToken
+		}
+		if entry.InputCostPerAudioToken != nil {
+			pricing.InputCostPerAudioToken = *entry.InputCostPerAudioToken
+		}
+		if entry.OutputCostPerAudioToken != nil {
+			pricing.OutputCostPerAudioToken = *entry.OutputCostPerAudioToken
 		}
 		if entry.CacheReadInputImageTokenCost != nil {
 			pricing.CacheReadInputImageTokenCost = *entry.CacheReadInputImageTokenCost

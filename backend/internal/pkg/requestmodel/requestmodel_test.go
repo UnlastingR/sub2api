@@ -271,3 +271,10 @@ func TestFromBodyCandidatesInteractionsAgent(t *testing.T) {
 		t.Fatalf("unexpected interactions model path (%q, %q)", val, path)
 	}
 }
+
+func TestFromBodyCandidatesCamelCaseAgentConfig(t *testing.T) {
+	got := FromBodyCandidates("/v1beta/agents", "application/json", []byte(`{"agentConfig":{"model":"gemini-3.5-pro"},"baseAgent":"gemini-3.5-flash"}`))
+	if len(got) != 2 || got[0] != "gemini-3.5-flash" || got[1] != "gemini-3.5-pro" {
+		t.Fatalf("expected camelCase agent models to be extracted, got %#v", got)
+	}
+}

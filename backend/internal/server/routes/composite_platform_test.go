@@ -415,3 +415,41 @@ func TestCompositeLiveRouteDispatchesBySessionModelNotTopLevelAlias(t *testing.T
 
 	require.Equal(t, http.StatusNoContent, w.Code)
 }
+
+type failingReadCloser struct{ readCalled bool }
+
+func (f *failingReadCloser) Read(_ []byte) (int, error) {
+	f.readCalled = true
+	return 0, io.EOF
+}
+
+func (f *failingReadCloser) Close() error { return nil }
+
+func TestCompositeGeminiTargetPlatformMiddlewareSkipsUploadBodyRead(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	resolver := service.NewCompositeRouteResolver(nil)
+	router.Use(gin.HandlerFunc(servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+		groupID := int64(1)
+		c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
+			GroupID: &groupID,
+			Group:   &service.Group{ID: groupID, Platform: service.PlatformComposite},
+		})
+		c.Next()
+	})))
+	router.Use(compositeGeminiTargetPlatformMiddleware(resolver))
+
+	body := &failingReadCloser{}
+	router.POST("/upload/v1beta/files", func(c *gin.Context) {
+		require.False(t, body.readCalled, "upload route must stream without buffering request body in middleware")
+		platform, ok := service.ResolvedTargetPlatformFromContext(c.Request.Context())
+		require.True(t, ok)
+		require.Equal(t, service.PlatformGemini, platform)
+		c.Status(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/upload/v1beta/files", body)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusNoContent, w.Code)
+}
