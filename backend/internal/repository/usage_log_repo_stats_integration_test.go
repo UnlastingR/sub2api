@@ -144,3 +144,61 @@ func TestUsageLog_GetStatsWithFilters_AggregatesAndEndpoints(t *testing.T) {
 	require.NotEmpty(t, stats.UpstreamEndpoints)
 	require.NotEmpty(t, stats.EndpointPaths)
 }
+
+func TestUsageLog_GeminiBatchSharesModelEndpointDistribution(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	client := tx.Client()
+	repo := newUsageLogRepositoryWithSQL(client, tx)
+
+	user := mustCreateUser(t, client, &service.User{Email: "gemini-endpoint-stats@test.com"})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-gemini-endpoints", Name: "gemini-endpoints"})
+	account := mustCreateAccount(t, client, &service.Account{Name: "gemini-endpoint-account"})
+	now := time.Now().UTC()
+	modelsEndpoint := "/v1beta/models"
+	batchEndpoint := "/v1beta/models/gemini-2.5-flash-lite:batchGenerateContent"
+	for _, path := range []string{modelsEndpoint, batchEndpoint} {
+		_, err := repo.Create(ctx, &service.UsageLog{
+			UserID: user.ID, APIKeyID: apiKey.ID, AccountID: account.ID,
+			Model: "gemini-2.5-flash-lite", InputTokens: 2, OutputTokens: 3,
+			TotalCost: 0.001, ActualCost: 0.001, CreatedAt: now,
+			InboundEndpoint: &path, UpstreamEndpoint: &path,
+		})
+		require.NoError(t, err)
+	}
+	start, end := now.Add(-time.Hour), now.Add(time.Hour)
+	filters := usagestats.UsageLogFilters{UserID: user.ID, StartTime: &start, EndTime: &end}
+	stats, err := repo.GetStatsWithFilters(ctx, filters)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), stats.TotalRequests)
+	require.Equal(t, []usagestats.EndpointStat{{
+		Endpoint: modelsEndpoint, Requests: 2, TotalTokens: 10, Cost: 0.002, ActualCost: 0.002,
+	}}, stats.Endpoints)
+	require.Equal(t, stats.Endpoints, stats.UpstreamEndpoints)
+	require.Len(t, stats.EndpointPaths, 1)
+	require.Equal(t, "/v1beta/models -> /v1beta/models", stats.EndpointPaths[0].Endpoint)
+	require.Equal(t, int64(2), stats.EndpointPaths[0].Requests)
+
+	batchRequestType := int16(service.RequestTypeBatch)
+	batchStats, err := repo.GetStatsWithFilters(ctx, usagestats.UsageLogFilters{
+		UserID: user.ID, StartTime: &start, EndTime: &end, RequestType: &batchRequestType,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), batchStats.TotalRequests)
+	require.Equal(t, modelsEndpoint, batchStats.Endpoints[0].Endpoint)
+
+	syncRequestType := int16(service.RequestTypeSync)
+	syncStats, err := repo.GetStatsWithFilters(ctx, usagestats.UsageLogFilters{
+		UserID: user.ID, StartTime: &start, EndTime: &end, RequestType: &syncRequestType,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), syncStats.TotalRequests)
+	require.Equal(t, modelsEndpoint, syncStats.Endpoints[0].Endpoint)
+
+	breakdown, err := repo.GetUserBreakdownStats(ctx, start, end, usagestats.UserBreakdownDimension{
+		Endpoint: modelsEndpoint, EndpointType: "inbound", UserID: user.ID,
+	}, 10)
+	require.NoError(t, err)
+	require.Len(t, breakdown, 1)
+	require.Equal(t, int64(2), breakdown[0].Requests)
+}

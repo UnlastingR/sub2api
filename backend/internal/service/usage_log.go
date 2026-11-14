@@ -20,11 +20,12 @@ const (
 	RequestTypeWSV2         RequestType = 3
 	RequestTypeCyberBlocked RequestType = 4 // cyber_policy 命中（透传但被上游安全策略拒绝）
 	RequestTypeLive         RequestType = 5
+	RequestTypeBatch        RequestType = 7 // Gemini Batch API：异步任务，仍按实际 Token 用量计费；6 预留
 )
 
 func (t RequestType) IsValid() bool {
 	switch t {
-	case RequestTypeUnknown, RequestTypeSync, RequestTypeStream, RequestTypeWSV2, RequestTypeCyberBlocked, RequestTypeLive:
+	case RequestTypeUnknown, RequestTypeSync, RequestTypeStream, RequestTypeWSV2, RequestTypeCyberBlocked, RequestTypeLive, RequestTypeBatch:
 		return true
 	default:
 		return false
@@ -50,6 +51,8 @@ func (t RequestType) String() string {
 		return "cyber"
 	case RequestTypeLive:
 		return "live"
+	case RequestTypeBatch:
+		return "batch"
 	default:
 		return "unknown"
 	}
@@ -73,8 +76,10 @@ func ParseUsageRequestType(value string) (RequestType, error) {
 		return RequestTypeCyberBlocked, nil
 	case "live":
 		return RequestTypeLive, nil
+	case "batch":
+		return RequestTypeBatch, nil
 	default:
-		return RequestTypeUnknown, fmt.Errorf("invalid request_type, allowed values: unknown, sync, stream, ws_v2, cyber, live")
+		return RequestTypeUnknown, fmt.Errorf("invalid request_type, allowed values: unknown, sync, stream, ws_v2, cyber, live, batch")
 	}
 }
 
@@ -90,7 +95,7 @@ func RequestTypeFromLegacy(stream bool, openAIWSMode bool) RequestType {
 
 func ApplyLegacyRequestFields(requestType RequestType, fallbackStream bool, fallbackOpenAIWSMode bool) (stream bool, openAIWSMode bool) {
 	switch requestType.Normalize() {
-	case RequestTypeSync:
+	case RequestTypeSync, RequestTypeBatch:
 		return false, false
 	case RequestTypeStream:
 		return true, false
@@ -227,10 +232,33 @@ func (u *UsageLog) EffectiveRequestType() RequestType {
 	if u == nil {
 		return RequestTypeUnknown
 	}
+	if normalized := u.RequestType.Normalize(); normalized != RequestTypeUnknown && normalized != RequestTypeSync {
+		return normalized
+	}
+	// Older batch usage records were stored as sync. Classify them on read without
+	// modifying historical rows or changing their token-based billing.
+	if u.InboundEndpoint != nil && isGeminiBatchUsageEndpoint(*u.InboundEndpoint) {
+		return RequestTypeBatch
+	}
 	if normalized := u.RequestType.Normalize(); normalized != RequestTypeUnknown {
 		return normalized
 	}
 	return RequestTypeFromLegacy(u.Stream, u.OpenAIWSMode)
+}
+
+func isGeminiBatchUsageEndpoint(endpoint string) bool {
+	endpoint = strings.TrimSpace(endpoint)
+	if !strings.HasPrefix(endpoint, "/v1beta/models/") {
+		return false
+	}
+	switch {
+	case strings.HasSuffix(endpoint, ":batchGenerateContent"),
+		strings.HasSuffix(endpoint, ":asyncBatchEmbedContent"),
+		strings.HasSuffix(endpoint, ":asyncBatchEmbedContents"):
+		return true
+	default:
+		return false
+	}
 }
 
 func (u *UsageLog) SyncRequestTypeAndLegacyFields() {

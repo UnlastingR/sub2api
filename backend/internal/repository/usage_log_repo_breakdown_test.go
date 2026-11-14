@@ -19,11 +19,11 @@ func TestResolveEndpointColumn(t *testing.T) {
 		endpointType string
 		want         string
 	}{
-		{"inbound", "ul.inbound_endpoint"},
-		{"upstream", "ul.upstream_endpoint"},
-		{"path", "ul.inbound_endpoint || ' -> ' || ul.upstream_endpoint"},
-		{"", "ul.inbound_endpoint"},        // default
-		{"unknown", "ul.inbound_endpoint"}, // fallback
+		{"inbound", normalizedUsageEndpointSQL("ul.inbound_endpoint")},
+		{"upstream", normalizedUsageEndpointSQL("ul.upstream_endpoint")},
+		{"path", normalizedUsageEndpointSQL("ul.inbound_endpoint") + " || ' -> ' || " + normalizedUsageEndpointSQL("ul.upstream_endpoint")},
+		{"", normalizedUsageEndpointSQL("ul.inbound_endpoint")},        // default
+		{"unknown", normalizedUsageEndpointSQL("ul.inbound_endpoint")}, // fallback
 	}
 
 	for _, tc := range tests {
@@ -32,6 +32,56 @@ func TestResolveEndpointColumn(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestEndpointDistributionGroupsGeminiModelActions(t *testing.T) {
+	t.Parallel()
+
+	column := normalizedUsageEndpointSQL("inbound_endpoint")
+	require.Contains(t, column, "WHEN TRIM(inbound_endpoint) LIKE '/v1beta/models/%'")
+	require.Contains(t, column, "THEN '/v1beta/models'")
+	require.Contains(t, column, "ELSE COALESCE(NULLIF(TRIM(inbound_endpoint), ''), 'unknown')")
+
+	// Account drilldowns use the same grouping key as the summary graph.
+	require.Equal(t, normalizedUsageEndpointSQL("ul.inbound_endpoint"), resolveEndpointColumn("inbound"))
+	require.Contains(t, resolveEndpointColumn("path"), " || ' -> ' || ")
+}
+
+func TestAccountEndpointDistributionUsesNormalizedGeminiPaths(t *testing.T) {
+	t.Parallel()
+
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+	start := time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+
+	mock.ExpectQuery(regexp.QuoteMeta("CASE WHEN TRIM(inbound_endpoint) LIKE '/v1beta/models/%' THEN '/v1beta/models'")).
+		WithArgs(start, end, int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost"}).
+			AddRow("/v1beta/models", int64(2), int64(10), 0.002, 0.002))
+
+	stats, err := repo.GetEndpointStatsWithFilters(context.Background(), start, end, 42, 0, 0, 0, "", nil, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, stats, 1)
+	require.Equal(t, "/v1beta/models", stats[0].Endpoint)
+	require.Equal(t, int64(2), stats[0].Requests)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageRequestTypeBatchFilterIncludesPreviousSyncRows(t *testing.T) {
+	t.Parallel()
+
+	batchCondition, batchArgs := buildRequestTypeFilterConditionWithAlias(3, int16(service.RequestTypeBatch), "ul")
+	require.Equal(t, []any{int16(service.RequestTypeBatch)}, batchArgs)
+	require.Contains(t, batchCondition, "ul.request_type = $3")
+	require.Contains(t, batchCondition, "ul.request_type IN (0, 1)")
+	require.Contains(t, batchCondition, "COALESCE(ul.inbound_endpoint, '') LIKE '%:batchGenerateContent'")
+	require.Contains(t, batchCondition, "COALESCE(ul.inbound_endpoint, '') LIKE '%:asyncBatchEmbedContent'")
+
+	syncCondition, syncArgs := buildRequestTypeFilterCondition(3, int16(service.RequestTypeSync))
+	require.Equal(t, []any{int16(service.RequestTypeSync)}, syncArgs)
+	require.Contains(t, syncCondition, "NOT (COALESCE(inbound_endpoint, '') LIKE '/v1beta/models/%'")
+	require.Contains(t, syncCondition, "COALESCE(inbound_endpoint, '') LIKE '%:batchGenerateContent'")
 }
 
 func TestResolveModelDimensionExpression(t *testing.T) {

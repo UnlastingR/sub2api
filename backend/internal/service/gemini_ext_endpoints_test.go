@@ -440,3 +440,34 @@ func TestAccountStatsBaselineWithBatchCostFactor(t *testing.T) {
 	require.NotNil(t, usageLog.AccountStatsCost)
 	require.InDelta(t, 1.0, *usageLog.AccountStatsCost, 1e-6)
 }
+
+func TestGeminiExtIDOnlyAgentResourceBindingAndFilter(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc := &GeminiMessagesCompatService{cache: &interactionTestCacheStub{}}
+
+	// Managed Agents create returns an ID rather than a canonical name.
+	svc.BindGeminiExtResourcesFromJSON(ctx, []byte("{\"id\":\"smoke-agent\",\"base_agent\":\"antigravity-preview-09-2026\"}"), "agent", 77, 42)
+	accountID, ownerUserID, ok := svc.ResolveGeminiExtResource(ctx, "agent", "smoke-agent")
+	require.True(t, ok)
+	require.Equal(t, int64(77), accountID)
+	require.Equal(t, int64(42), ownerUserID)
+
+	rawList := []byte("{\"agents\":[{\"id\":\"smoke-agent\",\"base_agent\":\"antigravity-preview-09-2026\"},{\"id\":\"unowned-agent\"}],\"nextPageToken\":\"next\"}")
+	filtered, err := svc.FilterGeminiExtListByUser(ctx, rawList, []string{"agents"}, "agent", 42)
+	require.NoError(t, err)
+	require.JSONEq(t,
+		"{\"agents\":[{\"id\":\"smoke-agent\",\"base_agent\":\"antigravity-preview-09-2026\"}],\"nextPageToken\":\"next\"}",
+		string(filtered),
+	)
+
+	otherUser, err := svc.FilterGeminiExtListByUser(ctx, rawList, []string{"agents"}, "agent", 999)
+	require.NoError(t, err)
+	require.JSONEq(t, "{\"agents\":[],\"nextPageToken\":\"next\"}", string(otherUser))
+
+	// Malformed IDs must not create a resource binding.
+	svc.BindGeminiExtResourcesFromJSON(ctx, []byte("{\"id\":\"../secret\"}"), "agent", 77, 42)
+	_, _, ok = svc.ResolveGeminiExtResource(ctx, "agent", "../secret")
+	require.False(t, ok)
+}

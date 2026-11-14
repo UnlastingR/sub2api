@@ -860,8 +860,14 @@ func TestBuildRequestTypeFilterConditionLegacyFallback(t *testing.T) {
 		{
 			name:      "sync_with_legacy_fallback",
 			request:   int16(service.RequestTypeSync),
-			wantWhere: "(request_type = $3 OR (request_type = 0 AND stream = FALSE AND openai_ws_mode = FALSE))",
+			wantWhere: "(request_type = $3 OR (request_type = 0 AND stream = FALSE AND openai_ws_mode = FALSE)) AND NOT (COALESCE(inbound_endpoint, '') LIKE '/v1beta/models/%' AND (COALESCE(inbound_endpoint, '') LIKE '%:batchGenerateContent' OR COALESCE(inbound_endpoint, '') LIKE '%:asyncBatchEmbedContent' OR COALESCE(inbound_endpoint, '') LIKE '%:asyncBatchEmbedContents'))",
 			wantArg:   int16(service.RequestTypeSync),
+		},
+		{
+			name:      "batch_with_historical_sync_fallback",
+			request:   int16(service.RequestTypeBatch),
+			wantWhere: "(request_type = $3 OR (request_type IN (0, 1) AND (COALESCE(inbound_endpoint, '') LIKE '/v1beta/models/%' AND (COALESCE(inbound_endpoint, '') LIKE '%:batchGenerateContent' OR COALESCE(inbound_endpoint, '') LIKE '%:asyncBatchEmbedContent' OR COALESCE(inbound_endpoint, '') LIKE '%:asyncBatchEmbedContents'))))",
+			wantArg:   int16(service.RequestTypeBatch),
 		},
 		{
 			name:      "stream_with_legacy_fallback",

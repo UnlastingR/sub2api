@@ -611,12 +611,22 @@ func (r *usageLogRepository) GetBatchAPIKeyUsageStats(ctx context.Context, apiKe
 func resolveEndpointColumn(endpointType string) string {
 	switch endpointType {
 	case "upstream":
-		return "ul.upstream_endpoint"
+		return normalizedUsageEndpointSQL("ul.upstream_endpoint")
 	case "path":
-		return "ul.inbound_endpoint || ' -> ' || ul.upstream_endpoint"
+		return normalizedUsageEndpointSQL("ul.inbound_endpoint") + " || ' -> ' || " + normalizedUsageEndpointSQL("ul.upstream_endpoint")
 	default:
-		return "ul.inbound_endpoint"
+		return normalizedUsageEndpointSQL("ul.inbound_endpoint")
 	}
+}
+
+// normalizedUsageEndpointSQL groups per-model Gemini actions with /v1beta/models
+// in endpoint distributions and drilldowns. The stored request URLs remain
+// unchanged so individual requests retain their full diagnostic paths.
+func normalizedUsageEndpointSQL(column string) string {
+	return fmt.Sprintf(
+		"CASE WHEN TRIM(%s) LIKE '/v1beta/models/%%' THEN '/v1beta/models' ELSE COALESCE(NULLIF(TRIM(%s), ''), 'unknown') END",
+		column, column,
+	)
 }
 
 // GetGlobalStats gets usage statistics for all users within a time range
@@ -698,8 +708,8 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 	query := fmt.Sprintf(`
 		WITH scoped AS (
 			SELECT
-				COALESCE(NULLIF(TRIM(inbound_endpoint), ''), 'unknown') AS inbound_endpoint,
-				COALESCE(NULLIF(TRIM(upstream_endpoint), ''), 'unknown') AS upstream_endpoint,
+				%s AS inbound_endpoint,
+				%s AS upstream_endpoint,
 				input_tokens,
 				output_tokens,
 				cache_creation_tokens,
@@ -732,7 +742,7 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 			(upstream_endpoint),
 			(inbound_endpoint, upstream_endpoint)
 		)
-	`, buildWhere(conditions))
+	`, normalizedUsageEndpointSQL("inbound_endpoint"), normalizedUsageEndpointSQL("upstream_endpoint"), buildWhere(conditions))
 
 	stats := &UsageStats{}
 	var totalAccountCost float64
@@ -845,14 +855,14 @@ func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Con
 
 	query := fmt.Sprintf(`
 		SELECT
-			COALESCE(NULLIF(TRIM(%s), ''), 'unknown') AS endpoint,
+			%s AS endpoint,
 			COUNT(*) AS requests,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) AS total_tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
 			%s
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
-	`, endpointColumn, actualCostExpr)
+	`, normalizedUsageEndpointSQL(endpointColumn), actualCostExpr)
 
 	args := []any{startTime, endTime}
 	if userID > 0 {
