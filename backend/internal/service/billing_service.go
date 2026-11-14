@@ -102,6 +102,8 @@ type ModelPricing struct {
 	InputPricePerTokenPriority         float64            // priority service tier 下每token输入价格 (USD)
 	ImageInputPricePerToken            float64            // 图片输入 token 价格 (USD)，用于多模态 embedding 等图文不同价场景；为 0 时回退到 InputPricePerToken
 	ImageCacheReadPricePerToken        float64            // 图片缓存输入价格；无独立价格时沿用缓存读取价
+	AudioInputPricePerToken            float64            // 音频输入 token 价格 (USD)，为 0 时回退到 InputPricePerToken
+	AudioOutputPricePerToken           float64            // 音频输出 token 价格 (USD)，为 0 时回退到 OutputPricePerToken
 	OutputPricePerToken                float64            // 每token输出价格 (USD)
 	OutputPricePerTokenPriority        float64            // priority service tier 下每token输出价格 (USD)
 	CacheCreationPricePerToken         float64            // 缓存创建每token价格 (USD)
@@ -189,8 +191,10 @@ func pricingWithPriorityMultiplier(base *ModelPricing, multiplier float64) *Mode
 type UsageTokens struct {
 	InputTokens            int
 	ImageInputTokens       int
+	AudioInputTokens       int
 	ImageCacheReadTokens   int
 	OutputTokens           int
+	AudioOutputTokens      int
 	CacheCreationTokens    int
 	CacheReadTokens        int
 	CacheCreation5mTokens  int
@@ -540,6 +544,48 @@ func (s *BillingService) initFallbackPricing() {
 	s.fallbackPrices["gemini-4-argon-cyber-permissive"] = &ModelPricing{
 		InputPricePerToken:     4e-6,
 		OutputPricePerToken:    20e-6,
+		CacheReadPricePerToken: 0.2e-6,
+		SupportsCacheBreakdown: false,
+	}
+
+	// Gemini Live / Robotics ER 2 / Computer Use / Agents
+	s.fallbackPrices["gemini-3.8-live"] = &ModelPricing{
+		InputPricePerToken:       0.75e-6,
+		AudioInputPricePerToken:  3.0e-6,
+		OutputPricePerToken:      3.75e-6,
+		AudioOutputPricePerToken: 12.0e-6,
+		CacheReadPricePerToken:   0.075e-6,
+		SupportsCacheBreakdown:   false,
+	}
+	s.fallbackPrices["gemini-3.5-live-translate-preview"] = &ModelPricing{
+		InputPricePerToken:     3.5e-6,
+		OutputPricePerToken:    21e-6,
+		SupportsCacheBreakdown: false,
+	}
+	s.fallbackPrices["gemini-3.5-transcribe-live"] = &ModelPricing{
+		InputPricePerToken:     3.5e-6,
+		OutputPricePerToken:    21e-6,
+		SupportsCacheBreakdown: false,
+	}
+	s.fallbackPrices["gemini-robotics-er-2-preview"] = &ModelPricing{
+		InputPricePerToken:     1e-6,
+		OutputPricePerToken:    5e-6,
+		CacheReadPricePerToken: 0.1e-6,
+		SupportsCacheBreakdown: false,
+	}
+	s.fallbackPrices["gemini-robotics-er-1.6-preview"] = &ModelPricing{
+		InputPricePerToken:     0.3e-6,
+		OutputPricePerToken:    2.5e-6,
+		SupportsCacheBreakdown: false,
+	}
+	s.fallbackPrices["gemini-2.5-computer-use-preview"] = &ModelPricing{
+		InputPricePerToken:     1.25e-6,
+		OutputPricePerToken:    10e-6,
+		SupportsCacheBreakdown: false,
+	}
+	s.fallbackPrices["deep-research-preview-04-2026"] = &ModelPricing{
+		InputPricePerToken:     2e-6,
+		OutputPricePerToken:    10e-6,
 		CacheReadPricePerToken: 0.2e-6,
 		SupportsCacheBreakdown: false,
 	}
@@ -1152,6 +1198,30 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	if strings.Contains(modelLower, "gemini-4-argon") {
 		return s.fallbackPrices["gemini-4-argon"]
 	}
+	if strings.Contains(modelLower, "gemini-3.8-live") || strings.Contains(modelLower, "gemini-3-8-live") {
+		return s.fallbackPrices["gemini-3.8-live"]
+	}
+	if strings.Contains(modelLower, "gemini-3.5-live-translate") {
+		return s.fallbackPrices["gemini-3.5-live-translate-preview"]
+	}
+	if strings.Contains(modelLower, "gemini-3.5-transcribe-live") {
+		return s.fallbackPrices["gemini-3.5-transcribe-live"]
+	}
+	if strings.Contains(modelLower, "gemini-robotics-er-2") {
+		return s.fallbackPrices["gemini-robotics-er-2-preview"]
+	}
+	if strings.Contains(modelLower, "gemini-robotics-er-1.6") || strings.Contains(modelLower, "gemini-robotics-er-1-6") {
+		return s.fallbackPrices["gemini-robotics-er-1.6-preview"]
+	}
+	if strings.Contains(modelLower, "computer-use") {
+		return s.fallbackPrices["gemini-2.5-computer-use-preview"]
+	}
+	if strings.Contains(modelLower, "deep-research") {
+		return s.fallbackPrices["deep-research-preview-04-2026"]
+	}
+	if strings.Contains(modelLower, "antigravity-") {
+		return s.fallbackPrices["gemini-3.8-flash"]
+	}
 
 	// DeepSeek 系列：官方模型 V4 Pro/Flash（含 vision-exp）按各自价卡；
 	// 其余 deepseek-*（含已停服的 deepseek-chat / deepseek-reasoner 与未知型号）
@@ -1474,6 +1544,8 @@ func (s *BillingService) getModelPricingAt(model string, pricingAt time.Time) (*
 				ImageInputPricePerToken:       litellmPricing.InputCostPerImageToken,
 				ImageCacheReadPricePerToken:   litellmPricing.CacheReadInputImageTokenCost,
 				ImageOutputPricePerToken:      litellmPricing.OutputCostPerImageToken,
+				AudioInputPricePerToken:       litellmPricing.InputCostPerAudioToken,
+				AudioOutputPricePerToken:      litellmPricing.OutputCostPerAudioToken,
 			}, true, pricingAt), nil
 		}
 	}
@@ -1765,41 +1837,48 @@ func (s *BillingService) computeTokenBreakdown(
 	}
 
 	bd := &CostBreakdown{}
-	// 分离图片输入 token 与文本输入 token（多模态 embedding、图片编辑等图文不同价场景）。
-	// InputCost 仅计文本输入，图片输入费用单独记入 ImageInputCost，便于对账；总额不变。
-	// ImageInputTokens 为 0 时（绝大多数 chat/vision 流量）走原始单价路径，行为不变。
-	if tokens.ImageInputTokens > 0 {
-		imageInputTokens := tokens.ImageInputTokens
-		textInputTokens := tokens.InputTokens - imageInputTokens
-		if textInputTokens < 0 {
-			textInputTokens = 0
-			imageInputTokens = tokens.InputTokens
-		}
+	// 分离图片/音频输入 token 与文本输入 token。
+	imageInputTokens := min(max(tokens.ImageInputTokens, 0), max(tokens.InputTokens, 0))
+	remainingInput := max(tokens.InputTokens-imageInputTokens, 0)
+	audioInputTokens := min(max(tokens.AudioInputTokens, 0), remainingInput)
+	textInputTokens := remainingInput - audioInputTokens
+	if imageInputTokens > 0 {
 		imageInputPrice := pricing.ImageInputPricePerToken
 		if imageInputPrice == 0 {
-			// 未配置图片输入档时回退到文本 input 价（已含 priority / 长上下文调整）
 			imageInputPrice = inputPrice
 		}
-		bd.InputCost = float64(textInputTokens) * inputPrice
 		bd.ImageInputCost = float64(imageInputTokens) * imageInputPrice
-	} else {
-		bd.InputCost = float64(tokens.InputTokens) * inputPrice
+	}
+	bd.InputCost = float64(textInputTokens) * inputPrice
+	if audioInputTokens > 0 {
+		audioInputPrice := pricing.AudioInputPricePerToken
+		if audioInputPrice == 0 {
+			audioInputPrice = inputPrice
+		}
+		bd.InputCost += float64(audioInputTokens) * audioInputPrice
 	}
 
-	// 分离图片输出 token 与文本输出 token
-	textOutputTokens := tokens.OutputTokens - tokens.ImageOutputTokens
-	if textOutputTokens < 0 {
-		textOutputTokens = 0
-	}
+	// 分离图片/音频输出 token 与文本输出 token
+	imageOutputTokens := min(max(tokens.ImageOutputTokens, 0), max(tokens.OutputTokens, 0))
+	remainingOutput := max(tokens.OutputTokens-imageOutputTokens, 0)
+	audioOutputTokens := min(max(tokens.AudioOutputTokens, 0), remainingOutput)
+	textOutputTokens := remainingOutput - audioOutputTokens
 	bd.OutputCost = float64(textOutputTokens) * outputPrice
+	if audioOutputTokens > 0 {
+		audioOutputPrice := pricing.AudioOutputPricePerToken
+		if audioOutputPrice == 0 {
+			audioOutputPrice = outputPrice
+		}
+		bd.OutputCost += float64(audioOutputTokens) * audioOutputPrice
+	}
 
 	// 图片输出 token 费用（独立费率）
-	if tokens.ImageOutputTokens > 0 {
+	if imageOutputTokens > 0 {
 		imgPrice := pricing.ImageOutputPricePerToken
 		if imgPrice == 0 && !pricing.ImageOutputPriceExplicit {
 			imgPrice = outputPrice
 		}
-		bd.ImageOutputCost = float64(tokens.ImageOutputTokens) * imgPrice
+		bd.ImageOutputCost = float64(imageOutputTokens) * imgPrice
 	}
 
 	// 缓存创建费用

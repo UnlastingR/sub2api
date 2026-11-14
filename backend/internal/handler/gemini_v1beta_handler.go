@@ -360,6 +360,10 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		googleError(c, http.StatusBadRequest, "Invalid model in URL")
 		return
 	}
+	if isGeminiBatchModelAction(action) {
+		h.handleGeminiBatchCreate(c, modelName, action)
+		return
+	}
 	urlModel := modelName
 	if resolvedModel, ok := service.ResolvedUpstreamModelFromContext(c.Request.Context()); ok && strings.TrimSpace(resolvedModel) != "" {
 		modelName = strings.TrimSpace(resolvedModel)

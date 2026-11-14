@@ -140,7 +140,9 @@ func DetectModelPlatform(model string) (string, bool) {
 		hasOpenAISeriesPrefix(normalized):
 		return PlatformOpenAI, true
 	case strings.HasPrefix(normalized, "gemini-"),
-		strings.HasPrefix(normalized, "learnlm-"):
+		strings.HasPrefix(normalized, "learnlm-"),
+		strings.HasPrefix(normalized, "antigravity-"),
+		strings.HasPrefix(normalized, "deep-research-"):
 		return PlatformGemini, true
 	case normalized == "grok" || strings.HasPrefix(normalized, "grok-"):
 		return PlatformGrok, true

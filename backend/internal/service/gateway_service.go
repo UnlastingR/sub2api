@@ -604,6 +604,8 @@ type ClaudeUsage struct {
 	CacheCreation5mTokens    int // 5分钟缓存创建token（来自嵌套 cache_creation 对象）
 	CacheCreation1hTokens    int // 1小时缓存创建token（来自嵌套 cache_creation 对象）
 	ImageOutputTokens        int `json:"image_output_tokens,omitempty"`
+	AudioInputTokens         int `json:"audio_input_tokens,omitempty"`
+	AudioOutputTokens        int `json:"audio_output_tokens,omitempty"`
 }
 
 // ForwardResult 转发结果
@@ -659,6 +661,8 @@ type ForwardResult struct {
 	// CacheStorageTokenHours 显式上下文缓存的存储量（缓存 token 数 × 存储小时数），按计费模型的
 	// 存储单价折算为费用后叠加在 token 费用之上。
 	CacheStorageTokenHours float64
+	// CostFactor 为附加整体费用系数（<=0 或 1 表示 1.0）；例如 Gemini Batch API 按标准价 50% 结算时设为 0.5。
+	CostFactor float64
 }
 
 // GatewayFailureStage identifies which request stage failed. The zero value is
@@ -810,6 +814,14 @@ type GatewayService struct {
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+}
+
+// ResolveCompositeRoute resolves composite group routing for a concrete model and endpoint.
+func (s *GatewayService) ResolveCompositeRoute(ctx context.Context, groupID int64, model, endpoint string) (CompositeRouteDecision, error) {
+	if s == nil || s.compositeResolver == nil {
+		return CompositeRouteDecision{}, nil
+	}
+	return s.compositeResolver.Resolve(ctx, groupID, model, endpoint)
 }
 
 // NewGatewayService creates a new GatewayService

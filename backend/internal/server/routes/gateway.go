@@ -366,7 +366,143 @@ func RegisterGatewayRoutes(
 		gemini.POST("/interactions/:interactionID/cancel", h.Gateway.GeminiV1BetaInteractionsCancel)
 		gemini.DELETE("/interactions/:interactionID", h.Gateway.GeminiV1BetaInteractionsDelete)
 		gemini.POST("/decisions", h.Gateway.GeminiV1BetaDecisions)
+
+		// Managed Agents & Antigravity 托管 Agent（agents / environments / credentials / triggers / webhooks）
+		gemini.GET("/agents", h.Gateway.GeminiV1BetaAgents)
+		gemini.POST("/agents", h.Gateway.GeminiV1BetaAgents)
+		gemini.GET("/agents/:agentID", h.Gateway.GeminiV1BetaAgentByID)
+		gemini.PATCH("/agents/:agentID", h.Gateway.GeminiV1BetaAgentByID)
+		gemini.DELETE("/agents/:agentID", h.Gateway.GeminiV1BetaAgentByID)
+
+		gemini.GET("/environments", h.Gateway.GeminiV1BetaEnvironments)
+		gemini.POST("/environments", h.Gateway.GeminiV1BetaEnvironments)
+		gemini.GET("/environments/*envAction", h.Gateway.GeminiV1BetaEnvironmentAction)
+		gemini.POST("/environments/*envAction", h.Gateway.GeminiV1BetaEnvironmentAction)
+		gemini.PUT("/environments/*envAction", h.Gateway.GeminiV1BetaEnvironmentAction)
+		gemini.PATCH("/environments/*envAction", h.Gateway.GeminiV1BetaEnvironmentAction)
+		gemini.DELETE("/environments/*envAction", h.Gateway.GeminiV1BetaEnvironmentAction)
+
+		gemini.GET("/credentials", h.Gateway.GeminiV1BetaCredentials)
+		gemini.POST("/credentials", h.Gateway.GeminiV1BetaCredentials)
+		gemini.GET("/credentials/:credentialID", h.Gateway.GeminiV1BetaCredentialByID)
+		gemini.PATCH("/credentials/:credentialID", h.Gateway.GeminiV1BetaCredentialByID)
+		gemini.DELETE("/credentials/:credentialID", h.Gateway.GeminiV1BetaCredentialByID)
+
+		gemini.GET("/triggers", h.Gateway.GeminiV1BetaTriggers)
+		gemini.POST("/triggers", h.Gateway.GeminiV1BetaTriggers)
+		gemini.GET("/triggers/*triggerAction", h.Gateway.GeminiV1BetaTriggerAction)
+		gemini.POST("/triggers/*triggerAction", h.Gateway.GeminiV1BetaTriggerAction)
+		gemini.PATCH("/triggers/*triggerAction", h.Gateway.GeminiV1BetaTriggerAction)
+		gemini.DELETE("/triggers/*triggerAction", h.Gateway.GeminiV1BetaTriggerAction)
+
+		gemini.GET("/webhooks", h.Gateway.GeminiV1BetaWebhooks)
+		gemini.POST("/webhooks", h.Gateway.GeminiV1BetaWebhooks)
+		gemini.GET("/webhooks/:webhookID", h.Gateway.GeminiV1BetaWebhookByID)
+		gemini.POST("/webhooks/:webhookID", h.Gateway.GeminiV1BetaWebhookByID)
+		gemini.PATCH("/webhooks/:webhookID", h.Gateway.GeminiV1BetaWebhookByID)
+		gemini.DELETE("/webhooks/:webhookID", h.Gateway.GeminiV1BetaWebhookByID)
+
+		// Live API 临时令牌与 /v1beta/live 别名
+		gemini.POST("/auth_tokens", h.Gateway.GeminiV1BetaAuthTokensCreate)
+		gemini.GET("/live", h.Gateway.GeminiLiveWS)
+
+		// File API & File Search Stores (RAG)
+		gemini.GET("/files", h.Gateway.GeminiV1BetaFilesList)
+		gemini.POST("/files", h.Gateway.GeminiV1BetaFilesCreate)
+		gemini.POST("/files:register", h.Gateway.GeminiV1BetaFilesRegister)
+		gemini.GET("/files/*fileAction", h.Gateway.GeminiV1BetaFileAction)
+		gemini.POST("/files/*fileAction", h.Gateway.GeminiV1BetaFileAction)
+		gemini.DELETE("/files/*fileAction", h.Gateway.GeminiV1BetaFileAction)
+
+		gemini.GET("/fileSearchStores", h.Gateway.GeminiV1BetaFileSearchStores)
+		gemini.POST("/fileSearchStores", h.Gateway.GeminiV1BetaFileSearchStores)
+		gemini.GET("/fileSearchStores/*storeAction", h.Gateway.GeminiV1BetaFileSearchStoreAction)
+		gemini.POST("/fileSearchStores/*storeAction", h.Gateway.GeminiV1BetaFileSearchStoreAction)
+		gemini.PATCH("/fileSearchStores/*storeAction", h.Gateway.GeminiV1BetaFileSearchStoreAction)
+		gemini.DELETE("/fileSearchStores/*storeAction", h.Gateway.GeminiV1BetaFileSearchStoreAction)
+
+		// Batch API (异步 5 折批处理与 LRO 查询)
+		gemini.GET("/batches", h.Gateway.GeminiV1BetaBatchesList)
+		gemini.GET("/batches/*batchAction", h.Gateway.GeminiV1BetaBatchAction)
+		gemini.POST("/batches/*batchAction", h.Gateway.GeminiV1BetaBatchAction)
+		gemini.PATCH("/batches/*batchAction", h.Gateway.GeminiV1BetaBatchAction)
+		gemini.DELETE("/batches/*batchAction", h.Gateway.GeminiV1BetaBatchAction)
+		gemini.GET("/models/:model/operations/*operationName", h.Gateway.GeminiV1BetaModelOperationGet)
 	}
+
+	// File API / Environments 2GB 流式上传组（跳过 bodyLimit 与模型 JSON 缓冲）
+	geminiUpload := r.Group("/upload/v1beta")
+	geminiUpload.Use(clientRequestID)
+	geminiUpload.Use(opsErrorLogger)
+	geminiUpload.Use(endpointNorm)
+	geminiUpload.Use(middleware.APIKeyAuthWithSubscriptionGoogle(apiKeyService, subscriptionService, cfg))
+	geminiUpload.Use(compositeGeminiTarget)
+	geminiUpload.Use(requireGroupGoogle)
+	{
+		geminiUpload.POST("/files", h.Gateway.GeminiUploadV1BetaFiles)
+		geminiUpload.PUT("/files", h.Gateway.GeminiUploadV1BetaFiles)
+		geminiUpload.POST("/files/*fileAction", h.Gateway.GeminiUploadV1BetaFiles)
+		geminiUpload.PUT("/files/*fileAction", h.Gateway.GeminiUploadV1BetaFiles)
+		geminiUpload.POST("/fileSearchStores/*storeAction", h.Gateway.GeminiUploadV1BetaFileSearchStores)
+		geminiUpload.PUT("/fileSearchStores/*storeAction", h.Gateway.GeminiUploadV1BetaFileSearchStores)
+		geminiUpload.POST("/environments/*envAction", h.Gateway.GeminiUploadV1BetaEnvironments)
+		geminiUpload.PUT("/environments/*envAction", h.Gateway.GeminiUploadV1BetaEnvironments)
+	}
+
+	// File API 2GB 流式下载组（跳过 bodyLimit）
+	geminiDownload := r.Group("/download/v1beta")
+	geminiDownload.Use(clientRequestID)
+	geminiDownload.Use(opsErrorLogger)
+	geminiDownload.Use(endpointNorm)
+	geminiDownload.Use(middleware.APIKeyAuthWithSubscriptionGoogle(apiKeyService, subscriptionService, cfg))
+	geminiDownload.Use(compositeGeminiTarget)
+	geminiDownload.Use(requireGroupGoogle)
+	{
+		geminiDownload.GET("/files/*fileAction", h.Gateway.GeminiDownloadV1BetaFiles)
+	}
+
+	// Gemini Live API WebSocket 双向全双工流
+	geminiLiveAuthMiddleware := middleware.APIKeyAuthWithSubscriptionGoogle(apiKeyService, subscriptionService, cfg)
+	geminiLiveConstrainedBridge := func(c *gin.Context) {
+		if c.GetHeader("x-goog-api-key") != "" || c.Query("key") != "" || strings.HasPrefix(strings.TrimSpace(c.GetHeader("Authorization")), "Bearer ") {
+			c.Next()
+			return
+		}
+		rawToken := handler.ExtractGeminiLiveConstrainedAccessToken(c)
+		if rawToken == "" {
+			c.Next()
+			return
+		}
+		meta, ok := h.Gateway.ResolveGeminiAuthTokenMeta(c.Request.Context(), rawToken)
+		if !ok || meta == nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": gin.H{
+					"code":    http.StatusUnauthorized,
+					"message": "Invalid or expired ephemeral access_token",
+					"status":  "UNAUTHENTICATED",
+				},
+			})
+			return
+		}
+		apiKey, err := apiKeyService.GetByID(c.Request.Context(), meta.APIKeyID)
+		if err != nil || apiKey == nil || apiKey.UserID != meta.UserID {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": gin.H{
+					"code":    http.StatusUnauthorized,
+					"message": "Invalid API key associated with ephemeral token",
+					"status":  "UNAUTHENTICATED",
+				},
+			})
+			return
+		}
+		handler.StashGeminiLiveConstrainedAuth(c, meta, rawToken)
+		c.Request.Header.Set("x-goog-api-key", apiKey.Key)
+		c.Next()
+	}
+	r.GET("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
+		clientRequestID, opsErrorLogger, endpointNorm, geminiLiveAuthMiddleware, groupModelAllowlist, compositeGeminiTarget, requireGroupGoogle, h.Gateway.GeminiLiveWS)
+	r.GET("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained",
+		clientRequestID, opsErrorLogger, endpointNorm, geminiLiveConstrainedBridge, geminiLiveAuthMiddleware, groupModelAllowlist, compositeGeminiTarget, requireGroupGoogle, h.Gateway.GeminiLiveWSConstrained)
 
 	// OpenAI Responses API（不带v1前缀的别名）— auto-route based on group platform
 	responsesHandler := func(c *gin.Context) {
@@ -630,7 +766,8 @@ func compositeGeminiTargetPlatformMiddleware(resolver *service.CompositeRouteRes
 		apiKey, ok := middleware.GetAPIKeyFromContext(c)
 		if ok && apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite {
 			model := compositeGeminiModelFromParams(c)
-			if model == "" && c.Request != nil && c.Request.Method == http.MethodPost {
+			isUploadRoute := c.Request != nil && (strings.HasPrefix(c.FullPath(), "/upload/") || strings.HasPrefix(c.Request.URL.Path, "/upload/"))
+			if model == "" && !isUploadRoute && c.Request != nil && c.Request.Method == http.MethodPost {
 				body, readErr := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
 				if readErr != nil {
 					if middleware.RejectRequestBodyReadError(c, "middleware.composite_gemini_route", readErr) {

@@ -42,7 +42,7 @@ func extractContentModerationInput(protocol string, body []byte, filterReminders
 	case ContentModerationProtocolOpenAIResponses:
 		collector.collectLastResponsesInput(gjson.GetBytes(body, "input"), &parts, &images)
 	case ContentModerationProtocolGemini:
-		collector.collectLastGeminiContent(gjson.GetBytes(body, "contents"), &parts, &images)
+		collector.collectGeminiBodyInput(gjson.ParseBytes(body), &parts, &images)
 	case ContentModerationProtocolGeminiInteractions:
 		collector.collectGeminiInteractionsInput(body, &parts, &images)
 	case ContentModerationProtocolGeminiDecisions:
@@ -290,6 +290,41 @@ func (collector moderationTextCollector) collectLastGeminiContent(contents gjson
 	}
 	*parts = append(*parts, candidate...)
 	*images = append(*images, candidateImages...)
+}
+
+func (collector moderationTextCollector) collectGeminiBodyInput(root gjson.Result, parts *[]string, images *[]string) {
+	if contents := root.Get("contents"); contents.Exists() {
+		collector.collectLastGeminiContent(contents, parts, images)
+	}
+	if content := root.Get("content"); content.Exists() && content.IsObject() {
+		if arr := content.Get("parts"); arr.IsArray() {
+			arr.ForEach(func(_, part gjson.Result) bool {
+				collector.addModerationText(parts, part.Get("text").String())
+				addGeminiModerationImage(images, part)
+				return true
+			})
+		}
+	}
+	for _, listPath := range []string{
+		"requests",
+		"batch.inputConfig.requests.requests",
+		"batch.input_config.requests.requests",
+		"inputConfig.requests.requests",
+		"input_config.requests.requests",
+	} {
+		arr := root.Get(listPath)
+		if !arr.Exists() || !arr.IsArray() {
+			continue
+		}
+		arr.ForEach(func(_, item gjson.Result) bool {
+			node := item
+			if inner := item.Get("request"); inner.Exists() && inner.IsObject() {
+				node = inner
+			}
+			collector.collectGeminiBodyInput(node, parts, images)
+			return true
+		})
+	}
 }
 
 func (collector moderationTextCollector) collectGeminiInteractionsInput(body []byte, parts *[]string, images *[]string) {

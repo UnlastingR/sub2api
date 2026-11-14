@@ -38,8 +38,21 @@ func DefaultModels() []Model {
 		{Name: "models/gemini-4-carbon", SupportedGenerationMethods: methods},
 		{Name: "models/gemini-4-hydrogen", SupportedGenerationMethods: methods},
 		{Name: "models/gemini-decision-1", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-embedding-001", SupportedGenerationMethods: []string{"embedContent", "batchEmbedContents"}},
-		{Name: "models/gemini-embedding-2", SupportedGenerationMethods: []string{"embedContent", "batchEmbedContents"}},
+		{Name: "models/gemini-2.5-computer-use-preview", SupportedGenerationMethods: methods},
+		{Name: "models/gemini-2.5-computer-use-preview-10-2025", SupportedGenerationMethods: methods},
+		{Name: "models/gemini-robotics-er-1.5-preview", SupportedGenerationMethods: methods},
+		{Name: "models/gemini-robotics-er-1.6-preview", SupportedGenerationMethods: methods},
+		{Name: "models/gemini-robotics-er-2-preview", SupportedGenerationMethods: methods},
+		{Name: "models/gemini-robotics-er-2-streaming-preview", SupportedGenerationMethods: []string{"bidiGenerateContent"}},
+		{Name: "models/gemini-3.8-live", SupportedGenerationMethods: []string{"bidiGenerateContent"}},
+		{Name: "models/gemini-3.8-live-extended-thinking", SupportedGenerationMethods: []string{"bidiGenerateContent"}},
+		{Name: "models/gemini-3.5-live-translate-preview", SupportedGenerationMethods: []string{"bidiGenerateContent"}},
+		{Name: "models/gemini-3.5-transcribe-live", SupportedGenerationMethods: []string{"bidiGenerateContent"}},
+		{Name: "models/antigravity-preview-09-2026", SupportedGenerationMethods: []string{"interactions"}},
+		{Name: "models/deep-research-preview-04-2026", SupportedGenerationMethods: []string{"interactions"}},
+		{Name: "models/deep-research-max-preview-04-2026", SupportedGenerationMethods: []string{"interactions"}},
+		{Name: "models/gemini-embedding-001", SupportedGenerationMethods: []string{"embedContent", "batchEmbedContents", "asyncBatchEmbedContent"}},
+		{Name: "models/gemini-embedding-2", SupportedGenerationMethods: []string{"embedContent", "batchEmbedContents", "asyncBatchEmbedContent"}},
 	}
 }
 
@@ -68,8 +81,14 @@ func FallbackModel(model string) Model {
 	if model == "" {
 		return Model{Name: "models/unknown", SupportedGenerationMethods: methods}
 	}
-	if len(model) >= 7 && model[:7] == "models/" {
-		return Model{Name: model, SupportedGenerationMethods: methods}
+	name := model
+	if !strings.HasPrefix(name, "models/") {
+		name = "models/" + name
 	}
-	return Model{Name: "models/" + model, SupportedGenerationMethods: methods}
+	for _, candidate := range DefaultModels() {
+		if candidate.Name == name {
+			return candidate
+		}
+	}
+	return Model{Name: name, SupportedGenerationMethods: methods}
 }

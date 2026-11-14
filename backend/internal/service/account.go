@@ -214,6 +214,29 @@ func (a *Account) IsSchedulable() bool {
 	return true
 }
 
+// BelongsToGroup reports whether the account is explicitly assigned to groupID.
+func (a *Account) BelongsToGroup(groupID int64) bool {
+	if a == nil || groupID <= 0 {
+		return false
+	}
+	for _, ag := range a.AccountGroups {
+		if ag.GroupID == groupID {
+			return true
+		}
+	}
+	for _, gid := range a.GroupIDs {
+		if gid == groupID {
+			return true
+		}
+	}
+	for _, g := range a.Groups {
+		if g != nil && g.ID == groupID {
+			return true
+		}
+	}
+	return false
+}
+
 // IsCredentialUsableForShadow 报告本账号(作为某 spark 影子的母账号)的凭据/传输是否可被影子透传使用。
 //
 // 检查「凭据/账号/传输可用性」:

@@ -846,21 +846,31 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	// 计算账号统计定价费用（使用最终上游模型匹配自定义规则）。纯存储费不是一次模型请求，
 	// 账号统计成本回落 total_cost（官方存储价）。
 	if apiKey.GroupID != nil && !isCacheStorageOnlyResult(result) {
+		statsBaselineCost := cost.TotalCost - cacheStorageCost
+		if result.CostFactor > 0 && result.CostFactor != 1 {
+			statsBaselineCost /= result.CostFactor
+		}
 		applyAccountStatsCost(ctx, usageLog, s.channelService, s.billingService,
 			account.ID, *apiKey.GroupID, result.UpstreamModel, result.Model,
 			// Anthropic's input_tokens excludes cache_read and cache_creation (billed separately);
 			// OpenAI gateway uses actualInputTokens which also excludes cache_read for the same reason.
 			UsageTokens{
 				InputTokens:         result.Usage.InputTokens,
+				AudioInputTokens:    result.Usage.AudioInputTokens,
 				OutputTokens:        result.Usage.OutputTokens,
+				AudioOutputTokens:   result.Usage.AudioOutputTokens,
 				CacheCreationTokens: result.Usage.CacheCreationInputTokens,
 				CacheReadTokens:     result.Usage.CacheReadInputTokens,
 				ImageOutputTokens:   result.Usage.ImageOutputTokens,
 			},
-			cost.TotalCost-cacheStorageCost, pricingAt,
+			statsBaselineCost, pricingAt,
 			accountStatsLongContextPricingEnabled(nil),
 		)
 		addCacheStorageToAccountStatsCost(usageLog, cacheStorageCost)
+		if result.CostFactor > 0 && result.CostFactor != 1 && usageLog.AccountStatsCost != nil {
+			scaled := *usageLog.AccountStatsCost * result.CostFactor
+			usageLog.AccountStatsCost = &scaled
+		}
 	}
 
 	simpleModeKeyRateLimitOnly := simpleModeKeyRateLimitBillingEnabled(s.cfg, apiKey)
@@ -1012,8 +1022,24 @@ func addCacheStorageToAccountStatsCost(usageLog *UsageLog, storageCost float64) 
 	usageLog.AccountStatsCost = &cost
 }
 
-// calculateRecordUsageCost 根据请求类型计算费用。
+// calculateRecordUsageCost 根据请求类型计算费用，并按需应用 ForwardResult.CostFactor（如 Batch API 5 折）。
 func (s *GatewayService) calculateRecordUsageCost(
+	ctx context.Context,
+	result *ForwardResult,
+	apiKey *APIKey,
+	billingModel string,
+	multiplier float64,
+	imageMultiplier float64,
+	pricingAt time.Time,
+) *CostBreakdown {
+	cost := s.calculateRecordUsageCostBase(ctx, result, apiKey, billingModel, multiplier, imageMultiplier, pricingAt)
+	if result != nil && result.CostFactor > 0 && result.CostFactor != 1 {
+		applyCostBreakdownMultiplier(cost, result.CostFactor)
+	}
+	return cost
+}
+
+func (s *GatewayService) calculateRecordUsageCostBase(
 	ctx context.Context,
 	result *ForwardResult,
 	apiKey *APIKey,
@@ -1263,7 +1289,9 @@ func (s *GatewayService) calculateTokenCost(
 ) *CostBreakdown {
 	tokens := UsageTokens{
 		InputTokens:           result.Usage.InputTokens,
+		AudioInputTokens:      result.Usage.AudioInputTokens,
 		OutputTokens:          result.Usage.OutputTokens,
+		AudioOutputTokens:     result.Usage.AudioOutputTokens,
 		CacheCreationTokens:   result.Usage.CacheCreationInputTokens,
 		CacheReadTokens:       result.Usage.CacheReadInputTokens,
 		CacheCreation5mTokens: result.Usage.CacheCreation5mTokens,

@@ -9,11 +9,14 @@ import (
 // geminiAIStudioActions 是允许出现在上游 URL 里的 action 集合，与 ForwardNative
 // 的入站校验保持一致，同时避免 compat 侧把可变字符串直接拼进 path。
 var geminiAIStudioActions = map[string]struct{}{
-	"generateContent":       {},
-	"streamGenerateContent": {},
-	"countTokens":           {},
-	"embedContent":          {},
-	"batchEmbedContents":    {},
+	"generateContent":         {},
+	"streamGenerateContent":   {},
+	"countTokens":             {},
+	"embedContent":            {},
+	"batchEmbedContents":      {},
+	"batchGenerateContent":    {},
+	"asyncBatchEmbedContent":  {},
+	"asyncBatchEmbedContents": {},
 }
 
 // buildGeminiAIStudioModelActionURL 组装 AI Studio 的

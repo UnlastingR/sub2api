@@ -1116,7 +1116,8 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	}
 
 	switch action {
-	case "generateContent", "streamGenerateContent", "countTokens", "embedContent", "batchEmbedContents":
+	case "generateContent", "streamGenerateContent", "countTokens", "embedContent", "batchEmbedContents",
+		"batchGenerateContent", "asyncBatchEmbedContent", "asyncBatchEmbedContents":
 		// ok
 	default:
 		return nil, s.writeGoogleError(c, http.StatusNotFound, "Unsupported action: "+action)
@@ -1187,7 +1188,12 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		useUpstreamStream = true
 		upstreamAction = "streamGenerateContent"
 	}
-	forceAIStudio := action == "countTokens" || action == "embedContent" || action == "batchEmbedContents"
+	forceAIStudio := action == "countTokens" ||
+		action == "embedContent" ||
+		action == "batchEmbedContents" ||
+		action == "batchGenerateContent" ||
+		action == "asyncBatchEmbedContent" ||
+		action == "asyncBatchEmbedContents"
 
 	var requestIDHeader string
 	var buildReq func(ctx context.Context) (*http.Request, string, error)
@@ -2954,7 +2960,7 @@ func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Co
 	observeGeminiImageOutputs(c, respBody)
 	if sig, ok := detectGeminiResponseSignalInBody(respBody); ok {
 		s.markGeminiResponseSignal(c, account, sig, false, upstreamRequestID)
-	} else if isGeminiEmptyResponseBody(respBody) {
+	} else if !strings.HasPrefix(strings.TrimSpace(gjson.GetBytes(respBody, "name").String()), "batches/") && isGeminiEmptyResponseBody(respBody) {
 		s.markGeminiEmptyResponse(c, account, false, upstreamRequestID)
 	}
 
