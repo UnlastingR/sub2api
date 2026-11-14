@@ -20,7 +20,7 @@ const (
 	RequestTypeWSV2         RequestType = 3
 	RequestTypeCyberBlocked RequestType = 4 // cyber_policy 命中（透传但被上游安全策略拒绝）
 	RequestTypeLive         RequestType = 5
-	RequestTypeBatch        RequestType = 6 // Gemini Batch API：异步任务，仍按实际 Token 用量计费
+	RequestTypeBatch        RequestType = 7 // Gemini Batch API：异步任务，仍按实际 Token 用量计费；6 预留
 )
 
 func (t RequestType) IsValid() bool {
