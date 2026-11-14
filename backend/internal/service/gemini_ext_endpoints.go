@@ -469,6 +469,10 @@ func (s *GeminiMessagesCompatService) FilterGeminiExtListByUser(
 		kept := make([]any, 0)
 		arr.ForEach(func(_, item gjson.Result) bool {
 			name := strings.TrimSpace(item.Get("name").String())
+			if name == "" {
+				// Managed Agents and some extension resources return an ID instead of a name.
+				name = strings.TrimSpace(item.Get("id").String())
+			}
 			kind, id := extractGeminiExtResourceKindID(name, defaultKind)
 			if kind == "" || id == "" {
 				return true
@@ -590,7 +594,7 @@ func (s *GeminiMessagesCompatService) BindGeminiExtResourcesFromJSON(ctx context
 	if s == nil || s.cache == nil || accountID <= 0 || len(data) == 0 || !gjson.ValidBytes(data) {
 		return
 	}
-	for _, field := range []string{"name", "file.name", "metadata.name", "response.name", "output.responsesFile", "response.responsesFile"} {
+	for _, field := range []string{"name", "id", "file.name", "metadata.name", "response.name", "output.responsesFile", "response.responsesFile"} {
 		if val := strings.TrimSpace(gjson.GetBytes(data, field).String()); val != "" {
 			if strings.Contains(val, "/") {
 				s.bindGeminiResourceByName(ctx, val, accountID, userID)
