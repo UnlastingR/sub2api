@@ -401,6 +401,7 @@ export default {
     ws: 'WS',
     stream: 'Stream',
     sync: 'Sync',
+    batch: 'Batch',
     nativeCompactionV2: 'Compaction',
     compactionFilter: 'Request Kind',
     allCompactionTypes: 'All Requests',

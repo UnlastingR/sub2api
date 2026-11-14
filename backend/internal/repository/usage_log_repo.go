@@ -232,9 +232,19 @@ func buildRequestTypeFilterConditionWithAlias(startArgIndex int, requestType int
 	if alias != "" {
 		prefix = alias + "."
 	}
+	// Pre-Batch usage records were written with request_type=sync or unknown.
+	// Keep the Batch and Sync filters disjoint for both historical and new rows.
+	endpoint := "COALESCE(" + prefix + "inbound_endpoint, '')"
+	legacyBatch := "(" + endpoint + " LIKE '/v1beta/models/%' AND (" +
+		endpoint + " LIKE '%:batchGenerateContent' OR " +
+		endpoint + " LIKE '%:asyncBatchEmbedContent' OR " +
+		endpoint + " LIKE '%:asyncBatchEmbedContents'))"
 	switch normalized {
 	case service.RequestTypeSync:
-		return fmt.Sprintf("(%srequest_type = $%d OR (%srequest_type = %d AND %sstream = FALSE AND %sopenai_ws_mode = FALSE))", prefix, startArgIndex, prefix, int16(service.RequestTypeUnknown), prefix, prefix), []any{requestTypeArg}
+		condition := fmt.Sprintf("(%srequest_type = $%d OR (%srequest_type = %d AND %sstream = FALSE AND %sopenai_ws_mode = FALSE))", prefix, startArgIndex, prefix, int16(service.RequestTypeUnknown), prefix, prefix)
+		return condition + " AND NOT " + legacyBatch, []any{requestTypeArg}
+	case service.RequestTypeBatch:
+		return fmt.Sprintf("(%srequest_type = $%d OR (%srequest_type IN (%d, %d) AND %s))", prefix, startArgIndex, prefix, int16(service.RequestTypeUnknown), int16(service.RequestTypeSync), legacyBatch), []any{requestTypeArg}
 	case service.RequestTypeStream:
 		return fmt.Sprintf("(%srequest_type = $%d OR (%srequest_type = %d AND %sstream = TRUE AND %sopenai_ws_mode = FALSE))", prefix, startArgIndex, prefix, int16(service.RequestTypeUnknown), prefix, prefix), []any{requestTypeArg}
 	case service.RequestTypeWSV2:

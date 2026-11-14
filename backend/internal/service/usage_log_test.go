@@ -23,6 +23,7 @@ func TestParseUsageRequestType(t *testing.T) {
 		{name: "ws_v2", input: "ws_v2", want: RequestTypeWSV2},
 		{name: "case_insensitive", input: "WS_V2", want: RequestTypeWSV2},
 		{name: "trim_spaces", input: "  stream  ", want: RequestTypeStream},
+		{name: "batch", input: "batch", want: RequestTypeBatch},
 		{name: "invalid", input: "xxx", wantErr: true},
 	}
 
@@ -49,6 +50,37 @@ func TestRequestTypeNormalizeAndString(t *testing.T) {
 	require.Equal(t, "sync", RequestTypeSync.String())
 	require.Equal(t, "stream", RequestTypeStream.String())
 	require.Equal(t, "ws_v2", RequestTypeWSV2.String())
+	require.Equal(t, "batch", RequestTypeBatch.String())
+	require.True(t, RequestTypeBatch.IsValid())
+}
+
+func TestGeminiBatchRequestTypeForExistingUsage(t *testing.T) {
+	t.Parallel()
+
+	for _, endpoint := range []string{
+		"/v1beta/models/gemini-2.5-flash-lite:batchGenerateContent",
+		"/v1beta/models/gemini-embedding-001:asyncBatchEmbedContent",
+		"/v1beta/models/gemini-embedding-001:asyncBatchEmbedContents",
+	} {
+		require.True(t, isGeminiBatchUsageEndpoint(endpoint))
+		for _, previousType := range []RequestType{RequestTypeSync, RequestTypeUnknown, RequestTypeBatch} {
+			log := &UsageLog{RequestType: previousType, InboundEndpoint: &endpoint}
+			require.Equal(t, RequestTypeBatch, log.EffectiveRequestType())
+		}
+	}
+	for _, endpoint := range []string{"/v1beta/models", "/v1beta/models/gemini-2.5-flash-lite:generateContent", "/v1beta/decisions", "/v1beta/batches"} {
+		require.False(t, isGeminiBatchUsageEndpoint(endpoint))
+		log := &UsageLog{RequestType: RequestTypeSync, InboundEndpoint: &endpoint}
+		require.Equal(t, RequestTypeSync, log.EffectiveRequestType())
+	}
+	endpoint := "/v1beta/models/gemini-2.5-flash-lite:batchGenerateContent"
+	cyber := &UsageLog{RequestType: RequestTypeCyberBlocked, InboundEndpoint: &endpoint}
+	require.Equal(t, RequestTypeCyberBlocked, cyber.EffectiveRequestType())
+
+	batch := &UsageLog{RequestType: RequestTypeBatch, Stream: true, OpenAIWSMode: true}
+	batch.SyncRequestTypeAndLegacyFields()
+	require.False(t, batch.Stream)
+	require.False(t, batch.OpenAIWSMode)
 }
 
 func TestRequestTypeFromLegacy(t *testing.T) {

@@ -1399,6 +1399,9 @@ func (s *GatewayService) buildRecordUsageLog(
 		SubscriptionID:           optionalSubscriptionID(subscription),
 		CreatedAt:                time.Now(),
 	}
+	if isGeminiBatchUsageEndpoint(input.InboundEndpoint) {
+		usageLog.RequestType = RequestTypeBatch
+	}
 	if result.ImageCount > 0 && (cost == nil || cost.BillingMode != string(BillingModeToken)) {
 		usageLog.RateMultiplier = imageMultiplier
 	}

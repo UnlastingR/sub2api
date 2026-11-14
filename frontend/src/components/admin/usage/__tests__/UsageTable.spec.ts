@@ -72,6 +72,7 @@ const messages: Record<string, string> = {
   'usage.imageTotalPrice': 'Image total price',
   'usage.stream': 'Stream',
   'usage.sync': 'Sync',
+  'usage.batch': 'Batch',
   'usage.nativeCompactionV2': 'Compaction',
   'admin.usage.billingModeToken': 'Token',
   'admin.usage.billingModePerRequest': 'Per request',
@@ -104,6 +105,8 @@ const DataTableStub = {
     <div>
       <div v-for="row in data" :key="row.request_id" :data-request-id="row.request_id">
         <slot name="cell-model" :row="row" :value="row.model" />
+        <slot name="cell-endpoint" :row="row" />
+        <slot name="cell-stream" :row="row" />
         <slot name="cell-reasoning_effort" :row="row" :value="row.reasoning_effort" />
         <slot name="cell-billing_mode" :row="row" />
         <slot name="cell-tokens" :row="row" />
@@ -145,6 +148,31 @@ const baseImageRow = {
 }
 
 describe('admin UsageTable tooltip', () => {
+  it('shows Batch as the request type and a compact endpoint while retaining the original path', () => {
+    const endpoint = '/v1beta/models/gemini-2.5-flash-lite:batchGenerateContent'
+    const row = {
+      ...baseImageRow,
+      request_id: 'req-gemini-batch',
+      inbound_endpoint: endpoint,
+      upstream_endpoint: endpoint,
+      request_type: 'sync' as const,
+      billing_mode: 'token',
+    }
+    const wrapper = mount(UsageTable, {
+      props: { data: [row], columns: [{ key: 'endpoint', label: 'Endpoint' }, { key: 'stream', label: 'Type' }] },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    try {
+      expect(wrapper.get('[data-testid="request-type-badge"]').text()).toBe('Batch')
+      const endpoints = wrapper.findAll('[data-request-id="req-gemini-batch"] [title]')
+      expect(endpoints.map((el) => el.text())).toEqual(['/v1beta/models', '/v1beta/models'])
+      expect(endpoints.map((el) => el.attributes('title'))).toEqual([endpoint, endpoint])
+      expect(row.billing_mode).toBe('token')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('shows the two OpenAI cache-write buckets without Anthropic lifetime labels', async () => {
     const row = { ...baseImageRow, image_count: 0, billing_mode: 'token', cache_creation_tokens: 2399, cache_creation_30m_tokens: 9, cache_creation_12h_tokens: 2390 }
     const wrapper = mount(UsageTable, {
