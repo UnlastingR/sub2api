@@ -3,6 +3,8 @@
 package service
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -162,4 +164,47 @@ func TestGetDefaultImagePrice_FallbackHardcoded(t *testing.T) {
 
 	cost = svc.CalculateImageCost("gemini-3-pro-image", "2K", 1, nil, 1.0)
 	require.InDelta(t, 0.201, cost.TotalCost, 0.0001)
+}
+
+func TestCalculateImageCost_GeminiPerModelPricing(t *testing.T) {
+	catalogPath := filepath.Join("..", "..", "resources", "model-pricing", "model_prices_and_context_window.json")
+	data, err := os.ReadFile(catalogPath)
+	require.NoError(t, err)
+
+	ps := &PricingService{}
+	parsed, err := ps.parsePricingData(data)
+	require.NoError(t, err)
+	ps.pricingData = parsed
+
+	svc := NewBillingService(nil, ps)
+
+	// gemini-2.5-flash-image 无论请求或输出尺寸均为固定单价 $0.039
+	cost := svc.CalculateImageCost("gemini-2.5-flash-image", "1K", 1, nil, 1.0)
+	require.InDelta(t, 0.039, cost.TotalCost, 0.0001)
+	cost = svc.CalculateImageCost("gemini-2.5-flash-image", "2K", 1, nil, 1.0)
+	require.InDelta(t, 0.039, cost.TotalCost, 0.0001)
+	cost = svc.CalculateImageCost("gemini-2.5-flash-image", "4K", 1, nil, 1.0)
+	require.InDelta(t, 0.039, cost.TotalCost, 0.0001)
+
+	// gemini-3.1-flash-image: 1K=$0.0672, 2K=1.5x, 4K=2.25x
+	cost = svc.CalculateImageCost("gemini-3.1-flash-image", "1K", 1, nil, 1.0)
+	require.InDelta(t, 0.0672, cost.TotalCost, 0.0001)
+	cost = svc.CalculateImageCost("gemini-3.1-flash-image", "2K", 1, nil, 1.0)
+	require.InDelta(t, 0.1008, cost.TotalCost, 0.0001)
+	cost = svc.CalculateImageCost("gemini-3.1-flash-image", "4K", 1, nil, 1.0)
+	require.InDelta(t, 0.1512, cost.TotalCost, 0.0001)
+
+	// gemini-nano-banana-2.1: 1K=$0.0336, 2K=1.5x, 4K=3.375x
+	cost = svc.CalculateImageCost("gemini-nano-banana-2.1", "1K", 1, nil, 1.0)
+	require.InDelta(t, 0.0336, cost.TotalCost, 0.0001)
+	cost = svc.CalculateImageCost("gemini-nano-banana-2.1", "2K", 1, nil, 1.0)
+	require.InDelta(t, 0.0504, cost.TotalCost, 0.0001)
+	cost = svc.CalculateImageCost("gemini-nano-banana-2.1", "4K", 1, nil, 1.0)
+	require.InDelta(t, 0.1134, cost.TotalCost, 0.0001)
+
+	// nano-banana-pro-preview fallback $0.134 (2K=1.5x, 4K=2x)
+	cost = svc.CalculateImageCost("nano-banana-pro-preview", "1K", 1, nil, 1.0)
+	require.InDelta(t, 0.134, cost.TotalCost, 0.0001)
+	cost = svc.CalculateImageCost("nano-banana-pro-preview", "4K", 1, nil, 1.0)
+	require.InDelta(t, 0.268, cost.TotalCost, 0.0001)
 }

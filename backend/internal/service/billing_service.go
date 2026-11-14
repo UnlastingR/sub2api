@@ -104,6 +104,7 @@ type ModelPricing struct {
 	ImageCacheReadPricePerToken        float64            // 图片缓存输入价格；无独立价格时沿用缓存读取价
 	AudioInputPricePerToken            float64            // 音频输入 token 价格 (USD)，为 0 时回退到 InputPricePerToken
 	AudioOutputPricePerToken           float64            // 音频输出 token 价格 (USD)，为 0 时回退到 OutputPricePerToken
+	VideoOutputPricePerToken           float64            // 视频输出 token 价格 (USD)，为 0 时回退到 OutputPricePerToken
 	OutputPricePerToken                float64            // 每token输出价格 (USD)
 	OutputPricePerTokenPriority        float64            // priority service tier 下每token输出价格 (USD)
 	CacheCreationPricePerToken         float64            // 缓存创建每token价格 (USD)
@@ -195,6 +196,7 @@ type UsageTokens struct {
 	ImageCacheReadTokens   int
 	OutputTokens           int
 	AudioOutputTokens      int
+	VideoOutputTokens      int
 	CacheCreationTokens    int
 	CacheReadTokens        int
 	CacheCreation5mTokens  int
@@ -589,6 +591,56 @@ func (s *BillingService) initFallbackPricing() {
 		CacheReadPricePerToken: 0.2e-6,
 		SupportsCacheBreakdown: false,
 	}
+
+	// Gemini Omni (text + video modality output rates)
+	s.fallbackPrices["gemini-omni-1.2-flash"] = &ModelPricing{
+		InputPricePerToken:       1.5e-6,
+		OutputPricePerToken:      9.0e-6,
+		VideoOutputPricePerToken: 12.0e-6,
+	}
+	s.fallbackPrices["gemini-omni-1.1-flash"] = &ModelPricing{
+		InputPricePerToken:       1.5e-6,
+		OutputPricePerToken:      9.0e-6,
+		VideoOutputPricePerToken: 17.5e-6,
+	}
+
+	// Gemini TTS models (pre-2027 intro rates on 3.8 TTS; 2027-01-01 switch applied in policy)
+	ttsPriorityMultiplier := 1.8
+	s.fallbackPrices["gemini-3.8-flash-lite-tts"] = &ModelPricing{
+		InputPricePerToken:       0.5e-6,
+		OutputPricePerToken:      6.0e-6,
+		AudioOutputPricePerToken: 6.0e-6,
+		FastMultiplier:           &ttsPriorityMultiplier,
+	}
+	s.fallbackPrices["gemini-3.8-flash-tts"] = &ModelPricing{
+		InputPricePerToken:       0.5e-6,
+		OutputPricePerToken:      9.0e-6,
+		AudioOutputPricePerToken: 9.0e-6,
+		FastMultiplier:           &ttsPriorityMultiplier,
+	}
+	s.fallbackPrices["gemini-3.1-flash-tts-preview"] = &ModelPricing{
+		InputPricePerToken:       1.0e-6,
+		OutputPricePerToken:      20.0e-6,
+		AudioOutputPricePerToken: 20.0e-6,
+	}
+	s.fallbackPrices["gemini-2.5-flash-preview-tts"] = &ModelPricing{
+		InputPricePerToken:       0.5e-6,
+		OutputPricePerToken:      10.0e-6,
+		AudioOutputPricePerToken: 10.0e-6,
+	}
+	s.fallbackPrices["gemini-2.5-pro-preview-tts"] = &ModelPricing{
+		InputPricePerToken:       1.0e-6,
+		OutputPricePerToken:      20.0e-6,
+		AudioOutputPricePerToken: 20.0e-6,
+	}
+	// Nano Banana Pro / Gemini 3 Pro Image token fallback
+	s.fallbackPrices["gemini-3-pro-image"] = &ModelPricing{
+		InputPricePerToken:       2.0e-6,
+		OutputPricePerToken:      12.0e-6,
+		ImageOutputPricePerToken: 120.0e-6,
+	}
+	// Free Gemini Developer API models (Gemma 4 open weights, legacy AQA, Lyria RealTime exp)
+	s.fallbackPrices["gemini-free-tier"] = &ModelPricing{}
 
 	// OpenAI GPT-5.4（业务指定价格）
 	s.fallbackPrices["gpt-5.4"] = &ModelPricing{
@@ -1188,8 +1240,36 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	if strings.Contains(modelLower, "gemini-3.7-flash") || strings.Contains(modelLower, "gemini-3-7-flash") {
 		return s.fallbackPrices["gemini-3.7-flash"]
 	}
+	// TTS 与 Omni 等更具体前缀必须先于 gemini-3.8-flash 匹配，避免子串碰撞。
+	if strings.Contains(modelLower, "gemini-3.8-flash-lite-tts") || strings.Contains(modelLower, "gemini-3-8-flash-lite-tts") {
+		return s.fallbackPrices["gemini-3.8-flash-lite-tts"]
+	}
+	if strings.Contains(modelLower, "gemini-3.8-flash-tts") || strings.Contains(modelLower, "gemini-3-8-flash-tts") {
+		return s.fallbackPrices["gemini-3.8-flash-tts"]
+	}
+	if strings.Contains(modelLower, "gemini-3.1-flash-tts") || strings.Contains(modelLower, "gemini-3-1-flash-tts") {
+		return s.fallbackPrices["gemini-3.1-flash-tts-preview"]
+	}
+	if strings.Contains(modelLower, "gemini-2.5-flash") && strings.Contains(modelLower, "tts") {
+		return s.fallbackPrices["gemini-2.5-flash-preview-tts"]
+	}
+	if strings.Contains(modelLower, "gemini-2.5-pro") && strings.Contains(modelLower, "tts") {
+		return s.fallbackPrices["gemini-2.5-pro-preview-tts"]
+	}
 	if strings.Contains(modelLower, "gemini-3.8-flash") || strings.Contains(modelLower, "gemini-3-8-flash") {
 		return s.fallbackPrices["gemini-3.8-flash"]
+	}
+	if strings.Contains(modelLower, "gemini-omni-1.2") || strings.Contains(modelLower, "gemini-omni-1-2") {
+		return s.fallbackPrices["gemini-omni-1.2-flash"]
+	}
+	if strings.Contains(modelLower, "gemini-omni") {
+		return s.fallbackPrices["gemini-omni-1.1-flash"]
+	}
+	if strings.Contains(modelLower, "nano-banana-pro") {
+		return s.fallbackPrices["gemini-3-pro-image"]
+	}
+	if strings.HasPrefix(modelLower, "gemma-4") || modelLower == "aqa" || strings.HasPrefix(modelLower, "lyria-realtime") {
+		return s.fallbackPrices["gemini-free-tier"]
 	}
 	// Cyber 变体不享受 Gemini 4 Argon 的优惠价，必须先于 "gemini-4-argon" 判。
 	if strings.Contains(modelLower, "gemini-4-argon-cyber") {
@@ -1546,6 +1626,7 @@ func (s *BillingService) getModelPricingAt(model string, pricingAt time.Time) (*
 				ImageOutputPricePerToken:      litellmPricing.OutputCostPerImageToken,
 				AudioInputPricePerToken:       litellmPricing.InputCostPerAudioToken,
 				AudioOutputPricePerToken:      litellmPricing.OutputCostPerAudioToken,
+				VideoOutputPricePerToken:      litellmPricing.OutputCostPerVideoToken,
 			}, true, pricingAt), nil
 		}
 	}
@@ -1606,6 +1687,9 @@ func applyChannelTokenPriceOverrides(pricing *ModelPricing, channelPricing *Chan
 	}
 	if channelPricing.OutputPrice != nil {
 		priority := channelTierOverridePrice(pricing.OutputPricePerToken, pricing.OutputPricePerTokenPriority, *channelPricing.OutputPrice)
+		if pricing.VideoOutputPricePerToken > 0 {
+			pricing.VideoOutputPricePerToken = channelTierOverridePrice(pricing.OutputPricePerToken, pricing.VideoOutputPricePerToken, *channelPricing.OutputPrice)
+		}
 		pricing.OutputPricePerToken = *channelPricing.OutputPrice
 		pricing.OutputPricePerTokenPriority = priority
 	}
@@ -1858,11 +1942,13 @@ func (s *BillingService) computeTokenBreakdown(
 		bd.InputCost += float64(audioInputTokens) * audioInputPrice
 	}
 
-	// 分离图片/音频输出 token 与文本输出 token
+	// 分离图片/音频/视频输出 token 与文本输出 token
 	imageOutputTokens := min(max(tokens.ImageOutputTokens, 0), max(tokens.OutputTokens, 0))
 	remainingOutput := max(tokens.OutputTokens-imageOutputTokens, 0)
 	audioOutputTokens := min(max(tokens.AudioOutputTokens, 0), remainingOutput)
-	textOutputTokens := remainingOutput - audioOutputTokens
+	remainingOutput -= audioOutputTokens
+	videoOutputTokens := min(max(tokens.VideoOutputTokens, 0), remainingOutput)
+	textOutputTokens := remainingOutput - videoOutputTokens
 	bd.OutputCost = float64(textOutputTokens) * outputPrice
 	if audioOutputTokens > 0 {
 		audioOutputPrice := pricing.AudioOutputPricePerToken
@@ -1870,6 +1956,13 @@ func (s *BillingService) computeTokenBreakdown(
 			audioOutputPrice = outputPrice
 		}
 		bd.OutputCost += float64(audioOutputTokens) * audioOutputPrice
+	}
+	if videoOutputTokens > 0 {
+		videoOutputPrice := pricing.VideoOutputPricePerToken
+		if videoOutputPrice == 0 {
+			videoOutputPrice = outputPrice
+		}
+		bd.OutputCost += float64(videoOutputTokens) * videoOutputPrice
 	}
 
 	// 图片输出 token 费用（独立费率）
@@ -2089,6 +2182,11 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 		}
 		return &cloned
 	}
+	if forceDeepSeekRates {
+		if geminiAdjusted, ok := applyGeminiCatalogPricingPolicy(model, pricing, pricingAt); ok {
+			return geminiAdjusted
+		}
+	}
 	normalized := normalizeKnownOpenAICodexModel(model)
 	usesCacheWritePremium := isOpenAIGPT56Model(normalized) || isOpenAIGPT6AstraModel(normalized) || (openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(normalized) || openai.IsGPT61TerraModelSpelling(normalized))
 	needsCacheCreationPolicy := usesCacheWritePremium && !pricing.CacheCreationPriceExplicit && (pricing.CacheCreationPricePerToken <= 0 ||
@@ -2125,6 +2223,99 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 		}
 	}
 	return &cloned
+}
+
+var gemini38TTSStandardStartAt = time.Date(2027, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+func applyGeminiCatalogPricingPolicy(model string, pricing *ModelPricing, pricingAt time.Time) (*ModelPricing, bool) {
+	modelLower := strings.ToLower(strings.TrimSpace(model))
+	modelLower = strings.TrimPrefix(modelLower, "models/")
+	effectiveAt := pricingAt
+	if effectiveAt.IsZero() {
+		effectiveAt = time.Now().UTC()
+	}
+	postIntro := !effectiveAt.Before(gemini38TTSStandardStartAt)
+
+	switch {
+	case strings.Contains(modelLower, "gemini-3.8-flash-lite-tts") || strings.Contains(modelLower, "gemini-3-8-flash-lite-tts"):
+		cloned := *pricing
+		ttsFast := 1.8
+		cloned.FastMultiplier = &ttsFast
+		cloned.InputPricePerTokenPriority = 0
+		cloned.OutputPricePerTokenPriority = 0
+		if postIntro {
+			cloned.InputPricePerToken = 1.0e-6
+			cloned.OutputPricePerToken = 12.0e-6
+			cloned.AudioOutputPricePerToken = 12.0e-6
+		} else {
+			cloned.InputPricePerToken = 0.5e-6
+			cloned.OutputPricePerToken = 6.0e-6
+			cloned.AudioOutputPricePerToken = 6.0e-6
+		}
+		return &cloned, true
+	case strings.Contains(modelLower, "gemini-3.8-flash-tts") || strings.Contains(modelLower, "gemini-3-8-flash-tts"):
+		cloned := *pricing
+		ttsFast := 1.8
+		cloned.FastMultiplier = &ttsFast
+		cloned.InputPricePerTokenPriority = 0
+		cloned.OutputPricePerTokenPriority = 0
+		if postIntro {
+			cloned.InputPricePerToken = 1.0e-6
+			cloned.OutputPricePerToken = 18.0e-6
+			cloned.AudioOutputPricePerToken = 18.0e-6
+		} else {
+			cloned.InputPricePerToken = 0.5e-6
+			cloned.OutputPricePerToken = 9.0e-6
+			cloned.AudioOutputPricePerToken = 9.0e-6
+		}
+		return &cloned, true
+	case strings.Contains(modelLower, "gemini-3.1-flash-tts") || strings.Contains(modelLower, "gemini-3-1-flash-tts"):
+		cloned := *pricing
+		cloned.InputPricePerToken = 1.0e-6
+		cloned.OutputPricePerToken = 20.0e-6
+		cloned.AudioOutputPricePerToken = 20.0e-6
+		return &cloned, true
+	case strings.Contains(modelLower, "gemini-2.5-flash") && strings.Contains(modelLower, "tts"):
+		cloned := *pricing
+		cloned.InputPricePerToken = 0.5e-6
+		cloned.OutputPricePerToken = 10.0e-6
+		cloned.AudioOutputPricePerToken = 10.0e-6
+		return &cloned, true
+	case strings.Contains(modelLower, "gemini-2.5-pro") && strings.Contains(modelLower, "tts"):
+		cloned := *pricing
+		cloned.InputPricePerToken = 1.0e-6
+		cloned.OutputPricePerToken = 20.0e-6
+		cloned.AudioOutputPricePerToken = 20.0e-6
+		return &cloned, true
+	case strings.Contains(modelLower, "gemini-omni-1.2") || strings.Contains(modelLower, "gemini-omni-1-2"):
+		if pricing.VideoOutputPricePerToken > 0 {
+			return pricing, true
+		}
+		cloned := *pricing
+		if cloned.InputPricePerToken <= 0 {
+			cloned.InputPricePerToken = 1.5e-6
+		}
+		if cloned.OutputPricePerToken <= 0 {
+			cloned.OutputPricePerToken = 9.0e-6
+		}
+		cloned.VideoOutputPricePerToken = 12.0e-6
+		return &cloned, true
+	case strings.Contains(modelLower, "gemini-omni"):
+		if pricing.VideoOutputPricePerToken > 0 {
+			return pricing, true
+		}
+		cloned := *pricing
+		if cloned.InputPricePerToken <= 0 {
+			cloned.InputPricePerToken = 1.5e-6
+		}
+		if cloned.OutputPricePerToken <= 0 {
+			cloned.OutputPricePerToken = 9.0e-6
+		}
+		cloned.VideoOutputPricePerToken = 17.5e-6
+		return &cloned, true
+	default:
+		return pricing, false
+	}
 }
 
 // openAIModelFastPricingRatio 返回业务口径下 OpenAI GPT 模型 Fast/priority
@@ -2520,9 +2711,46 @@ func (s *BillingService) getDefaultImagePrice(model string, imageSize string) fl
 		}
 	}
 
-	// 如果没有找到价格，使用硬编码默认值（$0.134，来自 gemini-3-pro-image-preview）
+	// 如果没有找到价格，按已知模型家族回退，最终兜底 $0.134（来自 gemini-3-pro-image-preview）
 	if basePrice <= 0 {
-		basePrice = defaultImageGenerationPrice
+		modelLowerNoPrefix := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
+		switch {
+		case modelLowerNoPrefix == "gemini-2.5-flash-image" || strings.HasPrefix(modelLowerNoPrefix, "gemini-2.5-flash-image-"):
+			basePrice = 0.039
+		case modelLowerNoPrefix == "gemini-3.1-flash-lite-image" || strings.HasPrefix(modelLowerNoPrefix, "gemini-3.1-flash-lite-image-"):
+			basePrice = 0.0336
+		case modelLowerNoPrefix == "gemini-3.1-flash-image" || strings.HasPrefix(modelLowerNoPrefix, "gemini-3.1-flash-image-"):
+			basePrice = 0.0672
+		case modelLowerNoPrefix == "gemini-nano-banana-2.1":
+			basePrice = 0.0336
+		case modelLowerNoPrefix == "nano-banana-pro-preview" || modelLowerNoPrefix == "nano-banana-pro":
+			basePrice = 0.134
+		default:
+			basePrice = defaultImageGenerationPrice
+		}
+	}
+
+	modelLower := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
+	switch {
+	case modelLower == "gemini-2.5-flash-image" || strings.HasPrefix(modelLower, "gemini-2.5-flash-image-"):
+		// Gemini 2.5 Flash Image is flat $0.039/image (1K ceiling, no 2K/4K surcharge).
+		return basePrice
+	case modelLower == "gemini-3.1-flash-image" || strings.HasPrefix(modelLower, "gemini-3.1-flash-image-"):
+		if imageSize == "2K" {
+			return basePrice * 1.5
+		}
+		if imageSize == "4K" {
+			return basePrice * 2.25
+		}
+		return basePrice
+	case modelLower == "gemini-nano-banana-2.1":
+		if imageSize == "2K" {
+			return basePrice * 1.5
+		}
+		if imageSize == "4K" {
+			return basePrice * 3.375
+		}
+		return basePrice
 	}
 
 	// 2K 尺寸 1.5 倍，4K 尺寸翻倍

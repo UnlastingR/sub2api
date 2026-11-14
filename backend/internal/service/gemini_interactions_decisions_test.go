@@ -3,7 +3,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -805,4 +809,59 @@ func TestGeminiInteractionBillingRequestID_BoundedAndDeterministic(t *testing.T)
 	require.Equal(t, 63, len(reqID1))
 	require.True(t, strings.HasPrefix(reqID1, GeminiInteractionBillingRequestIDPrefix))
 	require.True(t, isForcedUsageBillingRequestID(reqID1))
+}
+
+func TestExtractGeminiInteractionUsage_OmniModalitiesAndImageSizes(t *testing.T) {
+	payload := []byte(`{
+		"usage": {
+			"total_input_tokens": 120,
+			"total_output_tokens": 200,
+			"total_thought_tokens": 30,
+			"input_tokens_by_modality": [
+				{"modality": "TEXT", "tokens": 100},
+				{"modality": "AUDIO", "tokens": 20}
+			],
+			"output_tokens_by_modality": [
+				{"modality": "TEXT", "tokens": 150},
+				{"modality": "VIDEO", "tokens": 1931},
+				{"modality": "AUDIO", "tokens": 50}
+			]
+		}
+	}`)
+	usage := extractGeminiInteractionUsage(payload)
+	require.NotNil(t, usage)
+	require.Equal(t, 120, usage.InputTokens)
+	require.Equal(t, 20, usage.AudioInputTokens)
+	require.Equal(t, 1931, usage.VideoOutputTokens)
+	require.Equal(t, 50, usage.AudioOutputTokens)
+	// OutputTokens holds text (150) + thoughts (30) + video (1931) + audio (50) = 2161 so ComputeTokenBreakdown can subtract video/audio to leave text+thoughts (180).
+	require.Equal(t, 150+30+1931+50, usage.OutputTokens)
+
+	// Case 2: total_output_tokens already includes modalities + text + thoughts.
+	payload2 := []byte(`{
+		"usage": {
+			"total_input_tokens": 80,
+			"total_output_tokens": 2111,
+			"total_thought_tokens": 30,
+			"output_tokens_by_modality": [
+				{"modality": "TEXT", "token_count": 150},
+				{"modality": "VIDEO", "token_count": 1931}
+			]
+		}
+	}`)
+	usage2 := extractGeminiInteractionUsage(payload2)
+	require.NotNil(t, usage2)
+	require.Equal(t, 2141, usage2.OutputTokens)
+	require.Equal(t, 1931, usage2.VideoOutputTokens)
+
+	// Image output size decoding from Interaction outputs
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, image.NewNRGBA(image.Rect(0, 0, 1024, 1024))))
+	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+	imgPayload := []byte(`{
+		"outputs": [
+			{"type": "image", "data": "` + b64 + `", "mime_type": "image/png"}
+		]
+	}`)
+	require.Equal(t, []string{"1024x1024"}, extractGeminiInteractionImageOutputSizes(imgPayload))
 }

@@ -606,6 +606,7 @@ type ClaudeUsage struct {
 	ImageOutputTokens        int `json:"image_output_tokens,omitempty"`
 	AudioInputTokens         int `json:"audio_input_tokens,omitempty"`
 	AudioOutputTokens        int `json:"audio_output_tokens,omitempty"`
+	VideoOutputTokens        int `json:"video_output_tokens,omitempty"`
 }
 
 // ForwardResult 转发结果
