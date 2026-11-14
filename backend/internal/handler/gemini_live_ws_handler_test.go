@@ -4,6 +4,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -220,4 +221,48 @@ func TestGeminiLiveWS_OpaqueUpstreamTokenAndAudioBilling(t *testing.T) {
 		return len(logs) == 1
 	}, 2*time.Second, 10*time.Millisecond)
 	require.InDelta(t, 9.0, logs[0].TotalCost, 1e-6)
+}
+
+func TestGeminiLiveWS_PropagatesUpstreamCloseCodeAndReason(t *testing.T) {
+	const wantReason = "responseModalities TEXT is not supported for native audio model"
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		if _, _, err := conn.Read(r.Context()); err != nil {
+			return
+		}
+		_ = conn.Close(coderws.StatusInvalidFramePayloadData, wantReason)
+	}))
+	defer upstreamSrv.Close()
+
+	h, _, _, _, _, account, originKey, _ := newInteractionBillingTestHandler(t, `{}`)
+	h.cfg.Security.URLAllowlist = config.URLAllowlistConfig{Enabled: false, AllowInsecureHTTP: true, AllowPrivateHosts: true}
+	account.Credentials["base_url"] = upstreamSrv.URL
+
+	router := gin.New()
+	router.GET("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent", func(c *gin.Context) {
+		attachGeminiAuthContext(c, originKey, originKey.UserID)
+		h.GeminiLiveWS(c)
+	})
+	gwSrv := httptest.NewServer(router)
+	defer gwSrv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(gwSrv.URL, "http") + "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	clientConn, _, err := coderws.Dial(ctx, wsURL, nil)
+	require.NoError(t, err)
+	defer func() { _ = clientConn.CloseNow() }()
+
+	require.NoError(t, clientConn.Write(ctx, coderws.MessageText, []byte(`{"setup":{"model":"models/gemini-3.8-live-extended-thinking","generationConfig":{"responseModalities":["TEXT"]}}}`)))
+
+	_, _, readErr := clientConn.Read(ctx)
+	var closeErr coderws.CloseError
+	require.True(t, errors.As(readErr, &closeErr), "expected CloseError, got %v", readErr)
+	require.Equal(t, coderws.StatusInvalidFramePayloadData, closeErr.Code)
+	require.Equal(t, wantReason, closeErr.Reason)
 }

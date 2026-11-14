@@ -24,6 +24,7 @@ type GeminiLiveWSConn interface {
 	ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error)
 	WriteFrame(ctx context.Context, msgType coderws.MessageType, payload []byte) error
 	Close() error
+	CloseWithStatus(code coderws.StatusCode, reason string) error
 	CloseNow() error
 }
 

@@ -2887,7 +2887,7 @@
     "max_tokens": 65536,
     "mode": "chat",
     "output_cost_per_audio_token": 1.2e-05,
-    "output_cost_per_token": 3.75e-06,
+    "output_cost_per_token": 4.5e-06,
     "source": "https://ai.google.dev/gemini-api/docs/models#gemini-3.8-live",
     "supported_endpoints": [
       "/v1/realtime"
@@ -2910,7 +2910,7 @@
     "max_tokens": 65536,
     "mode": "chat",
     "output_cost_per_audio_token": 1.2e-05,
-    "output_cost_per_token": 3.75e-06,
+    "output_cost_per_token": 4.5e-06,
     "source": "https://ai.google.dev/gemini-api/docs/models#gemini-3.8-live",
     "supported_endpoints": [
       "/v1/realtime"
@@ -2930,7 +2930,7 @@
     "max_output_tokens": 65536,
     "max_tokens": 65536,
     "mode": "chat",
-    "output_cost_per_audio_token": 1.2e-05,
+    "output_cost_per_audio_token": 2.1e-05,
     "output_cost_per_token": 2.1e-05,
     "source": "https://ai.google.dev/gemini-api/docs/models#gemini-3.5-live-translate-preview",
     "supported_endpoints": [

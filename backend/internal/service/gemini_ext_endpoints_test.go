@@ -471,3 +471,57 @@ func TestGeminiExtIDOnlyAgentResourceBindingAndFilter(t *testing.T) {
 	_, _, ok = svc.ResolveGeminiExtResource(ctx, "agent", "../secret")
 	require.False(t, ok)
 }
+
+func TestGeminiExtAgentBaseAgentBindingPreserveAndFetch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	cache := &interactionTestCacheStub{}
+	svc := &GeminiMessagesCompatService{
+		cfg:   &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false, AllowInsecureHTTP: true}}},
+		cache: cache,
+		httpUpstream: &extFuncHTTPUpstream{
+			fn: func(req *http.Request) (*http.Response, error) {
+				require.Equal(t, http.MethodGet, req.Method)
+				require.Contains(t, req.URL.Path, "/v1beta/agents/legacy-agent")
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"name":"agents/legacy-agent","base_agent":"antigravity-preview-09-2026"}`)),
+				}, nil
+			},
+		},
+	}
+
+	svc.BindGeminiExtResourcesFromJSON(ctx, []byte(`{"name":"agents/reg-test-agent","base_agent":"antigravity-preview-09-2026"}`), "agent", 77, 42)
+	binding, ok := svc.ResolveGeminiExtAgentBinding(ctx, "reg-test-agent")
+	require.True(t, ok)
+	require.Equal(t, int64(77), binding.AccountID)
+	require.Equal(t, int64(42), binding.UserID)
+	require.Equal(t, "antigravity-preview-09-2026", binding.BaseAgent)
+
+	// Re-binding a response that omits base_agent must preserve the saved BaseAgent.
+	svc.BindGeminiExtResourcesFromJSON(ctx, []byte(`{"id":"reg-test-agent"}`), "agent", 77, 42)
+	binding, ok = svc.ResolveGeminiExtAgentBinding(ctx, "reg-test-agent")
+	require.True(t, ok)
+	require.Equal(t, "antigravity-preview-09-2026", binding.BaseAgent)
+
+	// Lazy GET fallback resolves BaseAgent and caches it separately without granting ownership.
+	acc := &Account{
+		ID:       88,
+		Platform: PlatformGemini,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":  "AIza-test",
+			"base_url": "https://generativelanguage.googleapis.com",
+		},
+	}
+	baseModel := svc.FetchGeminiAgentBaseModel(ctx, acc, "legacy-agent")
+	require.Equal(t, "antigravity-preview-09-2026", baseModel)
+	// Must NOT grant resource ownership to the caller.
+	_, ok = svc.ResolveGeminiExtAgentBinding(ctx, "legacy-agent")
+	require.False(t, ok)
+	// Second lookup hits pricing cache without calling upstream again.
+	svc.httpUpstream = nil
+	require.Equal(t, "antigravity-preview-09-2026", svc.FetchGeminiAgentBaseModel(ctx, acc, "legacy-agent"))
+}

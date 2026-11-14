@@ -554,15 +554,17 @@ func (s *BillingService) initFallbackPricing() {
 	s.fallbackPrices["gemini-3.8-live"] = &ModelPricing{
 		InputPricePerToken:       0.75e-6,
 		AudioInputPricePerToken:  3.0e-6,
-		OutputPricePerToken:      3.75e-6,
+		OutputPricePerToken:      4.5e-6,
 		AudioOutputPricePerToken: 12.0e-6,
 		CacheReadPricePerToken:   0.075e-6,
 		SupportsCacheBreakdown:   false,
 	}
 	s.fallbackPrices["gemini-3.5-live-translate-preview"] = &ModelPricing{
-		InputPricePerToken:     3.5e-6,
-		OutputPricePerToken:    21e-6,
-		SupportsCacheBreakdown: false,
+		InputPricePerToken:       3.5e-6,
+		AudioInputPricePerToken:  3.5e-6,
+		OutputPricePerToken:      21e-6,
+		AudioOutputPricePerToken: 21e-6,
+		SupportsCacheBreakdown:   false,
 	}
 	s.fallbackPrices["gemini-3.5-transcribe-live"] = &ModelPricing{
 		InputPricePerToken:     3.5e-6,

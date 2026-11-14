@@ -60,22 +60,39 @@ func GeminiInteractionBillingRequestID(interactionID string) string {
 // GeminiInteractionMeta preserves creation-time billing and channel mapping metadata
 // so deferred background GET polling and delayed reconciliation bill identically to synchronous responses.
 type GeminiInteractionMeta struct {
-	RequestModel       string             `json:"request_model,omitempty"`
-	UpstreamModel      string             `json:"upstream_model,omitempty"`
-	ChannelUsageFields ChannelUsageFields `json:"channel_usage_fields,omitempty"`
-	PricingAtUnixNano  int64              `json:"pricing_at_unix_nano,omitempty"`
-	ForceCacheBilling  bool               `json:"force_cache_billing,omitempty"`
-	APIKeyID           int64              `json:"api_key_id,omitempty"`
-	UserID             int64              `json:"user_id,omitempty"`
-	AccountID          int64              `json:"account_id,omitempty"`
-	SubscriptionID     *int64             `json:"subscription_id,omitempty"`
-	RequestPayloadHash string             `json:"request_payload_hash,omitempty"`
-	InboundEndpoint    string             `json:"inbound_endpoint,omitempty"`
-	UpstreamEndpoint   string             `json:"upstream_endpoint,omitempty"`
-	QuotaPlatform      string             `json:"quota_platform,omitempty"`
-	UserAgent          string             `json:"user_agent,omitempty"`
-	ClientIP           string             `json:"client_ip,omitempty"`
-	SessionID          string             `json:"session_id,omitempty"`
+	RequestModel         string             `json:"request_model,omitempty"`
+	UpstreamModel        string             `json:"upstream_model,omitempty"`
+	FallbackBillingModel string             `json:"fallback_billing_model,omitempty"`
+	ChannelUsageFields   ChannelUsageFields `json:"channel_usage_fields,omitempty"`
+	PricingAtUnixNano    int64              `json:"pricing_at_unix_nano,omitempty"`
+	ForceCacheBilling    bool               `json:"force_cache_billing,omitempty"`
+	APIKeyID             int64              `json:"api_key_id,omitempty"`
+	UserID               int64              `json:"user_id,omitempty"`
+	AccountID            int64              `json:"account_id,omitempty"`
+	SubscriptionID       *int64             `json:"subscription_id,omitempty"`
+	RequestPayloadHash   string             `json:"request_payload_hash,omitempty"`
+	InboundEndpoint      string             `json:"inbound_endpoint,omitempty"`
+	UpstreamEndpoint     string             `json:"upstream_endpoint,omitempty"`
+	QuotaPlatform        string             `json:"quota_platform,omitempty"`
+	UserAgent            string             `json:"user_agent,omitempty"`
+	ClientIP             string             `json:"client_ip,omitempty"`
+	SessionID            string             `json:"session_id,omitempty"`
+}
+
+// ExtractGeminiInteractionAgentID extracts the normalized custom agent ID when an Interactions
+// request targets `agent` without an explicit `model`.
+func ExtractGeminiInteractionAgentID(body []byte) string {
+	if !gjson.ValidBytes(body) {
+		return ""
+	}
+	if strings.TrimSpace(gjson.GetBytes(body, "model").String()) != "" {
+		return ""
+	}
+	agentID := normalizeGeminiAgentModelRef(gjson.GetBytes(body, "agent").String())
+	if !IsSafeGeminiExtID(agentID) {
+		return ""
+	}
+	return agentID
 }
 
 // GeminiInteractionPendingIndex persists unresolved interaction IDs across
