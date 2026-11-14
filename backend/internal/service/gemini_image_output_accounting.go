@@ -142,11 +142,6 @@ func extractGeminiImageOutputs(payload []byte) (int, []string) {
 	return count, sizes
 }
 
-func geminiPartIsImage(part gjson.Result) bool {
-	isImg, _ := geminiPartImageInfo(part)
-	return isImg
-}
-
 func geminiPartImageInfo(part gjson.Result) (bool, string) {
 	for _, key := range []string{"inlineData", "inline_data", "fileData", "file_data"} {
 		imagePart := part.Get(key)
