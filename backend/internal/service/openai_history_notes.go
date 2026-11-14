@@ -80,6 +80,12 @@ func (s *OpenAIGatewayService) ForwardCodexHistoryNotes(
 	sessionHash, legacyHash := deriveOpenAISessionHashes(clientSessionID)
 	lookupCtx := withOpenAILegacySessionHash(ctx, legacyHash)
 	accountID, err := s.getStickySessionAccountID(lookupCtx, groupID, sessionHash)
+	if errors.Is(err, ErrStickySessionNotFound) {
+		// A missing sticky binding is a normal fresh-session state, not a cache
+		// outage. Let the handler return an empty thread hint or an unbound-session
+		// response for the other History/Notes actions.
+		return nil, ErrCodexHistoryNotesSessionUnbound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("resolve sticky Codex account: %w", err)
 	}
