@@ -232,18 +232,34 @@ func (u *UsageLog) EffectiveRequestType() RequestType {
 	if u == nil {
 		return RequestTypeUnknown
 	}
-	if normalized := u.RequestType.Normalize(); normalized != RequestTypeUnknown && normalized != RequestTypeSync {
+	normalized := u.RequestType.Normalize()
+	if normalized != RequestTypeUnknown && normalized != RequestTypeSync && normalized != RequestTypeStream {
 		return normalized
 	}
-	// Older batch usage records were stored as sync. Classify them on read without
+	// Older batch usage records were stored as sync, and older Gemini Live WS
+	// usage records were stored as stream. Classify them on read without
 	// modifying historical rows or changing their token-based billing.
-	if u.InboundEndpoint != nil && isGeminiBatchUsageEndpoint(*u.InboundEndpoint) {
-		return RequestTypeBatch
+	if u.InboundEndpoint != nil {
+		if (normalized == RequestTypeUnknown || normalized == RequestTypeSync) && isGeminiBatchUsageEndpoint(*u.InboundEndpoint) {
+			return RequestTypeBatch
+		}
+		if (normalized == RequestTypeUnknown || normalized == RequestTypeStream) && isGeminiLiveUsageEndpoint(*u.InboundEndpoint) {
+			return RequestTypeLive
+		}
 	}
-	if normalized := u.RequestType.Normalize(); normalized != RequestTypeUnknown {
+	if normalized != RequestTypeUnknown {
 		return normalized
 	}
 	return RequestTypeFromLegacy(u.Stream, u.OpenAIWSMode)
+}
+
+func isGeminiLiveUsageEndpoint(endpoint string) bool {
+	switch strings.TrimSpace(endpoint) {
+	case geminiLiveBidiPath, geminiLiveBidiConstrainedPath, geminiLiveAliasPath:
+		return true
+	default:
+		return false
+	}
 }
 
 func isGeminiBatchUsageEndpoint(endpoint string) bool {

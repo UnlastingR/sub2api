@@ -131,6 +131,9 @@ func TestGeminiLiveWS_ConstrainedEphemeralTokenAndMultiTurnBilling(t *testing.T)
 	require.Equal(t, 350, logs[0].InputTokens)  // (100+50) + 200
 	require.Equal(t, 110, logs[0].OutputTokens) // (40+10) + 60
 	require.Equal(t, originKey.ID, logs[0].APIKeyID)
+	require.Equal(t, service.RequestTypeLive, logs[0].EffectiveRequestType())
+	require.NotNil(t, logs[0].IPAddress)
+	require.NotEmpty(t, *logs[0].IPAddress)
 }
 
 func TestGeminiLiveWS_OpaqueUpstreamTokenAndAudioBilling(t *testing.T) {

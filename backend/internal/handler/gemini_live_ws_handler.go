@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -114,6 +115,7 @@ func isExpectedGeminiLiveWSClose(err error) bool {
 }
 
 func (h *GatewayHandler) handleGeminiLiveWS(c *gin.Context, constrained bool) {
+	setOpsEndpointContext(c, "", int16(service.RequestTypeLive))
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok || apiKey == nil {
 		googleError(c, http.StatusUnauthorized, "Invalid API key")
@@ -344,6 +346,7 @@ func (h *GatewayHandler) handleGeminiLiveWS(c *gin.Context, constrained bool) {
 		}
 
 		mappedModel = account.GetMappedModel(routeModel)
+		setOpsEndpointContext(c, mappedModel, int16(service.RequestTypeLive))
 		dialCtx, cancelDial := context.WithTimeout(c.Request.Context(), geminiLiveDialTimeout)
 		upConn, statusCode, _, dialErr := h.geminiCompatService.DialGeminiLiveWS(dialCtx, account, constrained, c.Request.URL.Query(), upstreamEphemeralToken)
 		cancelDial()
@@ -511,6 +514,7 @@ func (h *GatewayHandler) handleGeminiLiveWS(c *gin.Context, constrained bool) {
 		billingSub := h.resolveGeminiExtSubscription(c, apiKey)
 		inboundEndpoint := c.Request.URL.Path
 		userAgent := c.GetHeader("User-Agent")
+		clientIP := ip.GetClientIP(c)
 		h.submitUsageRecordTask(context.WithoutCancel(c.Request.Context()), func(ctx context.Context) {
 			recCtx, cancel := context.WithTimeout(ctx, geminiExtOpTimeout)
 			defer cancel()
@@ -527,6 +531,8 @@ func (h *GatewayHandler) handleGeminiLiveWS(c *gin.Context, constrained bool) {
 				PricingAt:          requestStart,
 				APIKeyService:      h.apiKeyService,
 				UserAgent:          userAgent,
+				IPAddress:          clientIP,
+				RequestType:        service.RequestTypeLive,
 			}); err != nil {
 				logger.LegacyPrintf("handler.gemini_live_ws", "record gemini live usage failed: %v", err)
 			}

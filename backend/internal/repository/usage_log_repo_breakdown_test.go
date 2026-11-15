@@ -40,6 +40,8 @@ func TestEndpointDistributionGroupsGeminiModelActions(t *testing.T) {
 	column := normalizedUsageEndpointSQL("inbound_endpoint")
 	require.Contains(t, column, "WHEN TRIM(inbound_endpoint) LIKE '/v1beta/models/%'")
 	require.Contains(t, column, "THEN '/v1beta/models'")
+	require.Contains(t, column, "WHEN TRIM(inbound_endpoint) = '/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent' THEN '/ws/gemini-live'")
+	require.Contains(t, column, "WHEN TRIM(inbound_endpoint) = '/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained' THEN '/ws/gemini-live-constrained'")
 	require.Contains(t, column, "ELSE COALESCE(NULLIF(TRIM(inbound_endpoint), ''), 'unknown')")
 
 	// Account drilldowns use the same grouping key as the summary graph.

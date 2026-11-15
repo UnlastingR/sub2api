@@ -55,6 +55,7 @@ type RecordUsageInput struct {
 	APIKeyService        APIKeyQuotaUpdater // 可选：用于更新API Key配额
 	QuotaPlatform        string             // user×platform 配额计量平台：handler 在请求 ctx 内经 QuotaPlatform() 算定后传入（后扣运行在 worker 池 background ctx 上，取不到 ForcePlatform）
 	FallbackBillingModel string             // 可选：当请求模型/映射模型都查无价时的最后计费回退模型（如自定义托管 Agent 的 base_agent）
+	RequestType          RequestType        // 可选：显式指定请求类型（如 RequestTypeLive / RequestTypeBatch）；零值按既有规则推导
 
 	ChannelUsageFields // 渠道映射信息（由 handler 在 Forward 前解析）
 }
@@ -674,6 +675,7 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		APIKeyService:        input.APIKeyService,
 		QuotaPlatform:        input.QuotaPlatform,
 		FallbackBillingModel: input.FallbackBillingModel,
+		RequestType:          input.RequestType,
 		ChannelUsageFields:   input.ChannelUsageFields,
 	})
 }
@@ -696,6 +698,7 @@ type recordUsageCoreInput struct {
 	APIKeyService        APIKeyQuotaUpdater
 	QuotaPlatform        string
 	FallbackBillingModel string
+	RequestType          RequestType
 	ChannelUsageFields
 }
 
@@ -1416,8 +1419,12 @@ func (s *GatewayService) buildRecordUsageLog(
 		SubscriptionID:           optionalSubscriptionID(subscription),
 		CreatedAt:                time.Now(),
 	}
-	if isGeminiBatchUsageEndpoint(input.InboundEndpoint) {
+	if input.RequestType.IsValid() && input.RequestType != RequestTypeUnknown {
+		usageLog.RequestType = input.RequestType
+	} else if isGeminiBatchUsageEndpoint(input.InboundEndpoint) {
 		usageLog.RequestType = RequestTypeBatch
+	} else if isGeminiLiveUsageEndpoint(input.InboundEndpoint) {
+		usageLog.RequestType = RequestTypeLive
 	}
 	if result.ImageCount > 0 && (cost == nil || cost.BillingMode != string(BillingModeToken)) {
 		usageLog.RateMultiplier = imageMultiplier

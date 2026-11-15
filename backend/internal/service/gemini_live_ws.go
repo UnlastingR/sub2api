@@ -17,6 +17,7 @@ import (
 const (
 	geminiLiveBidiPath            = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 	geminiLiveBidiConstrainedPath = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained"
+	geminiLiveAliasPath           = "/v1beta/live"
 )
 
 // GeminiLiveWSConn abstracts raw WebSocket frame transport for Gemini Live bidirectional proxy.

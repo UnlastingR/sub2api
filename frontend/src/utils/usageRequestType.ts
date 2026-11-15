@@ -1,5 +1,5 @@
 import type { UsageRequestType } from '@/types'
-import { isGeminiBatchUsageEndpoint } from '@/utils/usageEndpoint'
+import { isGeminiBatchUsageEndpoint, isGeminiLiveUsageEndpoint } from '@/utils/usageEndpoint'
 
 export interface UsageRequestTypeLike {
   request_type?: string | null
@@ -15,11 +15,15 @@ export const isUsageRequestType = (value: unknown): value is UsageRequestType =>
 }
 
 export const resolveUsageRequestType = (value: UsageRequestTypeLike): UsageRequestType => {
-  // Historical Gemini Batch records were stored as sync. Preserve explicit
-  // non-sync types such as cyber and live, then recognize the older endpoints.
+  // Historical Gemini Batch records were stored as sync and historical Gemini
+  // Live WS records were stored as stream. Preserve explicit types such as
+  // cyber/live/batch, then recognize older endpoints.
   if (value.request_type === 'batch') return 'batch'
+  if (value.request_type === 'live') return 'live'
   if ((!value.request_type || value.request_type === 'sync' || value.request_type === 'unknown')
     && isGeminiBatchUsageEndpoint(value.inbound_endpoint)) return 'batch'
+  if ((!value.request_type || value.request_type === 'stream' || value.request_type === 'unknown')
+    && isGeminiLiveUsageEndpoint(value.inbound_endpoint)) return 'live'
   if (isUsageRequestType(value.request_type)) {
     return value.request_type
   }

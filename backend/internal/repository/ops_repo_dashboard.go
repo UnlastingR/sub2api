@@ -79,6 +79,7 @@ FROM (
  AND COALESCE(ul.billing_mode, '') <> 'image'
  ` + fmt.Sprintf("AND ul.request_type IN (%d, %d, %d, %d)",
 		service.RequestTypeSync, service.RequestTypeStream, service.RequestTypeWSV2, service.RequestTypeCyberBlocked) + `
+ AND NOT (COALESCE(ul.inbound_endpoint, '') IN ` + legacyGeminiLiveEndpointsSQL + `)
 ) rates`
 	var stats service.OpsOutputTPS
 	if err := r.db.QueryRowContext(ctx, query, args...).Scan(&stats.P5, &stats.P10, &stats.P50, &stats.Avg, &stats.SampleCount); err != nil {

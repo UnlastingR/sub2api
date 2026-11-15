@@ -620,12 +620,16 @@ func resolveEndpointColumn(endpointType string) string {
 }
 
 // normalizedUsageEndpointSQL groups per-model Gemini actions with /v1beta/models
-// in endpoint distributions and drilldowns. The stored request URLs remain
-// unchanged so individual requests retain their full diagnostic paths.
+// and shortens long Gemini Live WebSocket gRPC paths in endpoint distributions and
+// drilldowns. The stored request URLs remain unchanged so individual requests
+// retain their full diagnostic paths.
 func normalizedUsageEndpointSQL(column string) string {
 	return fmt.Sprintf(
-		"CASE WHEN TRIM(%s) LIKE '/v1beta/models/%%' THEN '/v1beta/models' ELSE COALESCE(NULLIF(TRIM(%s), ''), 'unknown') END",
-		column, column,
+		"CASE WHEN TRIM(%s) LIKE '/v1beta/models/%%' THEN '/v1beta/models' "+
+			"WHEN TRIM(%s) = '/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent' THEN '/ws/gemini-live' "+
+			"WHEN TRIM(%s) = '/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained' THEN '/ws/gemini-live-constrained' "+
+			"ELSE COALESCE(NULLIF(TRIM(%s), ''), 'unknown') END",
+		column, column, column, column,
 	)
 }
 
