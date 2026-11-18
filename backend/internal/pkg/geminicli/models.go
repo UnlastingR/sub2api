@@ -43,7 +43,7 @@ var DefaultModels = []Model{
 	{ID: "antigravity-preview-09-2026", Type: "model", DisplayName: "Antigravity Preview (09-2026)", CreatedAt: ""},
 	{ID: "deep-research-preview-04-2026", Type: "model", DisplayName: "Deep Research Preview (04-2026)", CreatedAt: ""},
 	{ID: "deep-research-max-preview-04-2026", Type: "model", DisplayName: "Deep Research Max Preview (04-2026)", CreatedAt: ""},
-}
+	}
 
 // GoogleOneModels is the conservative model set exposed for legacy Google One
 // OAuth accounts. Newer subscription models are served through Antigravity
