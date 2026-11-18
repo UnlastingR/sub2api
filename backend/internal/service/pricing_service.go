@@ -281,6 +281,7 @@ type LiteLLMModelPricing struct {
 	InputCostPerImageToken              float64 `json:"input_cost_per_image_token"`  // 图片输入 token 价格（如 gpt-image-2 图片编辑）
 	InputCostPerAudioToken              float64 `json:"input_cost_per_audio_token"`  // 音频输入 token 价格
 	OutputCostPerAudioToken             float64 `json:"output_cost_per_audio_token"` // 音频输出 token 价格
+	OutputCostPerVideoToken             float64 `json:"output_cost_per_video_token"` // 视频输出 token 价格
 	CacheReadInputImageTokenCost        float64 `json:"cache_read_input_image_token_cost"`
 	// CacheStorageCostPerTokenPerHour 显式上下文缓存存储单价（每 token 每小时，USD），一般由定价覆盖文件提供，
 	// 配置后优先于内置价（见 BillingService.CacheStoragePricePerTokenHour）。
@@ -321,6 +322,7 @@ type LiteLLMRawEntry struct {
 	InputCostPerImageToken              *float64 `json:"input_cost_per_image_token"`
 	InputCostPerAudioToken              *float64 `json:"input_cost_per_audio_token"`
 	OutputCostPerAudioToken             *float64 `json:"output_cost_per_audio_token"`
+	OutputCostPerVideoToken             *float64 `json:"output_cost_per_video_token"`
 	CacheReadInputImageTokenCost        *float64 `json:"cache_read_input_image_token_cost"`
 	CacheStorageCostPerTokenPerHour     *float64 `json:"cache_storage_cost_per_token_per_hour"`
 }
@@ -807,6 +809,9 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 		}
 		if entry.OutputCostPerAudioToken != nil {
 			pricing.OutputCostPerAudioToken = *entry.OutputCostPerAudioToken
+		}
+		if entry.OutputCostPerVideoToken != nil {
+			pricing.OutputCostPerVideoToken = *entry.OutputCostPerVideoToken
 		}
 		if entry.CacheReadInputImageTokenCost != nil {
 			pricing.CacheReadInputImageTokenCost = *entry.CacheReadInputImageTokenCost
@@ -1451,6 +1456,9 @@ func normalizeModelNameForPricing(model string) string {
 			return "gpt-5.6-sol"
 		}
 		return canonical
+	}
+	if model == "nano-banana-pro-preview" || model == "nano-banana-pro" {
+		return "gemini-3-pro-image-preview"
 	}
 	return normalizeAntigravityClaudeTierAlias(normalizeGeminiThinkingTierAlias(model))
 }

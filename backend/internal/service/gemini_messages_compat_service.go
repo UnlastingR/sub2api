@@ -1697,6 +1697,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 	// 图片生成计费
 	imageInputSize := s.extractImageInputSize(body)
+	imageOutputSizes := observedGeminiImageOutputSizes(c)
 	imageSize := normalizeOpenAIImageSizeTier(imageInputSize)
 	imageCount := resolveGeminiImageCount(c, originalModel, mappedModel)
 	// 客户端在收到结束分片前断开时只计已送达的图片。
@@ -1722,6 +1723,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		ImageSize:                     imageSize,
 		ImageInputSize:                imageInputSize,
 		UpstreamPriceMultiplier:       VertexUpstreamPriceMultiplier(account, mappedModel, cachedContentLocation),
+		ImageOutputSizes:              imageOutputSizes,
 	}, nil
 }
 
@@ -3212,14 +3214,25 @@ func extractGeminiUsage(data []byte) *ClaudeUsage {
 	cached := int(usage.Get("cachedContentTokenCount").Int())
 	thoughts := int(usage.Get("thoughtsTokenCount").Int())
 
-	// 从 candidatesTokensDetails 提取 IMAGE 模态 token 数
+	// 从 candidatesTokensDetails 提取 TEXT / IMAGE / VIDEO / AUDIO 模态 token 数
+	textOutputTokens := 0
 	imageTokens := 0
+	audioOutputTokens := 0
+	videoOutputTokens := 0
 	candidateDetails := usage.Get("candidatesTokensDetails")
 	if candidateDetails.Exists() {
 		candidateDetails.ForEach(func(_, detail gjson.Result) bool {
-			if detail.Get("modality").String() == "IMAGE" {
-				imageTokens = int(detail.Get("tokenCount").Int())
-				return false
+			modality := strings.ToUpper(strings.TrimSpace(detail.Get("modality").String()))
+			count := int(detail.Get("tokenCount").Int())
+			switch modality {
+			case "TEXT":
+				textOutputTokens += count
+			case "IMAGE":
+				imageTokens += count
+			case "AUDIO":
+				audioOutputTokens += count
+			case "VIDEO":
+				videoOutputTokens += count
 			}
 			return true
 		})
@@ -3228,11 +3241,16 @@ func extractGeminiUsage(data []byte) *ClaudeUsage {
 	// 注意：Gemini 的 promptTokenCount 包含 cachedContentTokenCount，
 	// 但 Claude 的 input_tokens 不包含 cache_read_input_tokens，需要减去。
 	// prompt 被拦截时上游可能只报 cachedContentTokenCount，差值下限为 0。
+	// 当 candidatesTokenCount 未含音频/视频等非图片输出模态时，按模态明细补全并保留 thoughts。
+	nonImageModalitySum := textOutputTokens + audioOutputTokens + videoOutputTokens
+	outputTokens := max(cand, nonImageModalitySum) + thoughts
 	return &ClaudeUsage{
 		InputTokens:          max(prompt-cached, 0),
-		OutputTokens:         cand + thoughts,
+		OutputTokens:         outputTokens,
 		CacheReadInputTokens: cached,
 		ImageOutputTokens:    imageTokens,
+		AudioOutputTokens:    audioOutputTokens,
+		VideoOutputTokens:    videoOutputTokens,
 	}
 }
 

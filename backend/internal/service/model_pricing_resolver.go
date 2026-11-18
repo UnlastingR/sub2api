@@ -341,10 +341,14 @@ func intervalToModelPricing(iv *PricingInterval, base *ModelPricing, chPricing *
 	}
 	if iv.OutputPrice != nil {
 		pricing.OutputPricePerTokenPriority = channelTierOverridePrice(pricing.OutputPricePerToken, pricing.OutputPricePerTokenPriority, *iv.OutputPrice)
+		if pricing.VideoOutputPricePerToken > 0 {
+			pricing.VideoOutputPricePerToken = channelTierOverridePrice(pricing.OutputPricePerToken, pricing.VideoOutputPricePerToken, *iv.OutputPrice)
+		}
 		pricing.OutputPricePerToken = *iv.OutputPrice
 	} else if iv.OutputMultiplier != nil {
 		pricing.OutputPricePerToken = applyMultiplier(pricing.OutputPricePerToken, iv.OutputMultiplier)
 		pricing.OutputPricePerTokenPriority = applyMultiplier(pricing.OutputPricePerTokenPriority, iv.OutputMultiplier)
+		pricing.VideoOutputPricePerToken = applyMultiplier(pricing.VideoOutputPricePerToken, iv.OutputMultiplier)
 	}
 	if iv.CacheWritePrice != nil {
 		pricing.CacheCreationPricePerTokenPriority = channelTierOverridePrice(pricing.CacheCreationPricePerToken, pricing.CacheCreationPricePerTokenPriority, *iv.CacheWritePrice)

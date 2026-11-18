@@ -872,8 +872,14 @@ func TestBuildRequestTypeFilterConditionLegacyFallback(t *testing.T) {
 		{
 			name:      "stream_with_legacy_fallback",
 			request:   int16(service.RequestTypeStream),
-			wantWhere: "(request_type = $3 OR (request_type = 0 AND stream = TRUE AND openai_ws_mode = FALSE))",
+			wantWhere: "(request_type = $3 OR (request_type = 0 AND stream = TRUE AND openai_ws_mode = FALSE)) AND NOT COALESCE(inbound_endpoint, '') IN ('/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent', '/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained', '/v1beta/live')",
 			wantArg:   int16(service.RequestTypeStream),
+		},
+		{
+			name:      "live_with_historical_stream_fallback",
+			request:   int16(service.RequestTypeLive),
+			wantWhere: "(request_type = $3 OR (request_type IN (0, 2) AND COALESCE(inbound_endpoint, '') IN ('/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent', '/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained', '/v1beta/live')))",
+			wantArg:   int16(service.RequestTypeLive),
 		},
 		{
 			name:      "ws_v2_with_legacy_fallback",

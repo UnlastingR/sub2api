@@ -39,21 +39,23 @@ func (s *GatewayService) ResolveUserGroupRateMultiplier(ctx context.Context, use
 // RecordUsageInput 记录使用量的输入参数。
 // 异步 worker 只接收计费所需快照，不能持有 ParsedRequest/RequestBodyRef 这类大请求体引用。
 type RecordUsageInput struct {
-	Result             *ForwardResult
-	APIKey             *APIKey
-	User               *User
-	Account            *Account
-	Subscription       *UserSubscription  // 可选：订阅信息
-	PricingAt          time.Time          // token 售价固定时刻；零值保持既有的记录时刻语义
-	InboundEndpoint    string             // 入站端点（客户端请求路径）
-	UpstreamEndpoint   string             // 上游端点（标准化后的上游路径）
-	UserAgent          string             // 请求的 User-Agent
-	IPAddress          string             // 请求的客户端 IP 地址
-	SessionID          string             // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
-	RequestPayloadHash string             // 请求体语义哈希，用于降低 request_id 误复用时的静默误去重风险
-	ForceCacheBilling  bool               // 强制缓存计费：将 input_tokens 转为 cache_read 计费（用于粘性会话切换）
-	APIKeyService      APIKeyQuotaUpdater // 可选：用于更新API Key配额
-	QuotaPlatform      string             // user×platform 配额计量平台：handler 在请求 ctx 内经 QuotaPlatform() 算定后传入（后扣运行在 worker 池 background ctx 上，取不到 ForcePlatform）
+	Result               *ForwardResult
+	APIKey               *APIKey
+	User                 *User
+	Account              *Account
+	Subscription         *UserSubscription  // 可选：订阅信息
+	PricingAt            time.Time          // token 售价固定时刻；零值保持既有的记录时刻语义
+	InboundEndpoint      string             // 入站端点（客户端请求路径）
+	UpstreamEndpoint     string             // 上游端点（标准化后的上游路径）
+	UserAgent            string             // 请求的 User-Agent
+	IPAddress            string             // 请求的客户端 IP 地址
+	SessionID            string             // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
+	RequestPayloadHash   string             // 请求体语义哈希，用于降低 request_id 误复用时的静默误去重风险
+	ForceCacheBilling    bool               // 强制缓存计费：将 input_tokens 转为 cache_read 计费（用于粘性会话切换）
+	APIKeyService        APIKeyQuotaUpdater // 可选：用于更新API Key配额
+	QuotaPlatform        string             // user×platform 配额计量平台：handler 在请求 ctx 内经 QuotaPlatform() 算定后传入（后扣运行在 worker 池 background ctx 上，取不到 ForcePlatform）
+	FallbackBillingModel string             // 可选：当请求模型/映射模型都查无价时的最后计费回退模型（如自定义托管 Agent 的 base_agent）
+	RequestType          RequestType        // 可选：显式指定请求类型（如 RequestTypeLive / RequestTypeBatch）；零值按既有规则推导
 
 	ChannelUsageFields // 渠道映射信息（由 handler 在 Forward 前解析）
 }
@@ -660,42 +662,46 @@ func writeUsageLogBestEffort(ctx context.Context, repo UsageLogRepository, usage
 // RecordUsage 记录使用量并扣费（或更新订阅用量）
 func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInput) error {
 	return s.recordUsageCore(ctx, &recordUsageCoreInput{
-		Result:             input.Result,
-		APIKey:             input.APIKey,
-		User:               input.User,
-		Account:            input.Account,
-		Subscription:       input.Subscription,
-		PricingAt:          input.PricingAt,
-		InboundEndpoint:    input.InboundEndpoint,
-		UpstreamEndpoint:   input.UpstreamEndpoint,
-		UserAgent:          input.UserAgent,
-		IPAddress:          input.IPAddress,
-		SessionID:          input.SessionID,
-		RequestPayloadHash: input.RequestPayloadHash,
-		ForceCacheBilling:  input.ForceCacheBilling,
-		APIKeyService:      input.APIKeyService,
-		QuotaPlatform:      input.QuotaPlatform,
-		ChannelUsageFields: input.ChannelUsageFields,
+		Result:               input.Result,
+		APIKey:               input.APIKey,
+		User:                 input.User,
+		Account:              input.Account,
+		Subscription:         input.Subscription,
+		PricingAt:            input.PricingAt,
+		InboundEndpoint:      input.InboundEndpoint,
+		UpstreamEndpoint:     input.UpstreamEndpoint,
+		UserAgent:            input.UserAgent,
+		IPAddress:            input.IPAddress,
+		SessionID:            input.SessionID,
+		RequestPayloadHash:   input.RequestPayloadHash,
+		ForceCacheBilling:    input.ForceCacheBilling,
+		APIKeyService:        input.APIKeyService,
+		QuotaPlatform:        input.QuotaPlatform,
+		FallbackBillingModel: input.FallbackBillingModel,
+		RequestType:          input.RequestType,
+		ChannelUsageFields:   input.ChannelUsageFields,
 	})
 }
 
 // recordUsageCoreInput 是 recordUsageCore 的公共输入字段，从两种输入结构体中提取。
 type recordUsageCoreInput struct {
-	Result             *ForwardResult
-	APIKey             *APIKey
-	User               *User
-	Account            *Account
-	Subscription       *UserSubscription
-	PricingAt          time.Time
-	InboundEndpoint    string
-	UpstreamEndpoint   string
-	UserAgent          string
-	IPAddress          string
-	SessionID          string
-	RequestPayloadHash string
-	ForceCacheBilling  bool
-	APIKeyService      APIKeyQuotaUpdater
-	QuotaPlatform      string
+	Result               *ForwardResult
+	APIKey               *APIKey
+	User                 *User
+	Account              *Account
+	Subscription         *UserSubscription
+	PricingAt            time.Time
+	InboundEndpoint      string
+	UpstreamEndpoint     string
+	UserAgent            string
+	IPAddress            string
+	SessionID            string
+	RequestPayloadHash   string
+	ForceCacheBilling    bool
+	APIKeyService        APIKeyQuotaUpdater
+	QuotaPlatform        string
+	FallbackBillingModel string
+	RequestType          RequestType
 	ChannelUsageFields
 }
 
@@ -801,7 +807,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 
 	multiplier, imageMultiplier, pricingAt := s.recordUsageMultipliers(ctx, apiKey, user, input.PricingAt)
-	billingModel := s.recordUsageBillingModel(ctx, apiKey, result, input.ChannelUsageFields)
+	billingModel := s.recordUsageBillingModel(ctx, apiKey, result, input.ChannelUsageFields, input.FallbackBillingModel)
 	cacheStorageCost := s.cacheStorageCost(result, billingModel)
 
 	// 确定 RequestedModel（渠道映射前的原始模型）
@@ -933,7 +939,7 @@ func (s *GatewayService) recordUsageMultipliers(ctx context.Context, apiKey *API
 }
 
 // recordUsageBillingModel 按计费模型来源、composite 规则与无价兜底确定计费模型。
-func (s *GatewayService) recordUsageBillingModel(ctx context.Context, apiKey *APIKey, result *ForwardResult, fields ChannelUsageFields) string {
+func (s *GatewayService) recordUsageBillingModel(ctx context.Context, apiKey *APIKey, result *ForwardResult, fields ChannelUsageFields, fallbackModels ...string) string {
 	concreteBillingModel := forwardResultBillingModel(result.Model, result.UpstreamModel)
 	billingModel := concreteBillingModel
 	if fields.BillingModelSource == BillingModelSourceChannelMapped && fields.ChannelMappedModel != "" {
@@ -950,8 +956,11 @@ func (s *GatewayService) recordUsageBillingModel(ctx context.Context, apiKey *AP
 		billingModel = s.compositeBillableModel(ctx, apiKey, billingModel, concreteBillingModel)
 	}
 	// 通用兜底（与 OpenAI 路径的 usageBillingModelCandidates 语义对齐）：
-	// 选定模型查不到任何价格时回退到实际转发的具体模型。已定价流量不受影响。
-	return s.billableModelWithFallback(ctx, apiKey, billingModel, result.UpstreamModel, result.Model)
+	// 选定模型查不到任何价格时回退到实际转发的具体模型与调用方提供的后备模型。已定价流量不受影响。
+	candidates := make([]string, 0, 2+len(fallbackModels))
+	candidates = append(candidates, result.UpstreamModel, result.Model)
+	candidates = append(candidates, fallbackModels...)
+	return s.billableModelWithFallback(ctx, apiKey, billingModel, candidates...)
 }
 
 // cacheStoragePrice 返回计费模型的显式缓存存储单价；计费模型未配置时依次回退到实际转发模型与请求模型。
@@ -988,7 +997,7 @@ func isCacheStorageOnlyResult(result *ForwardResult) bool {
 
 // CacheStoragePriced 判断 RecordUsage 对 input.Result 采用的计费模型（含回退候选）是否配置了显式缓存存储单价。
 func (s *GatewayService) CacheStoragePriced(ctx context.Context, input *RecordUsageInput) bool {
-	billingModel := s.recordUsageBillingModel(ctx, input.APIKey, input.Result, input.ChannelUsageFields)
+	billingModel := s.recordUsageBillingModel(ctx, input.APIKey, input.Result, input.ChannelUsageFields, input.FallbackBillingModel)
 	return s.cacheStoragePrice(input.Result, billingModel) > 0
 }
 
@@ -999,7 +1008,7 @@ func (s *GatewayService) QuoteUsageCost(ctx context.Context, input *RecordUsageI
 		user = input.APIKey.User
 	}
 	multiplier, imageMultiplier, pricingAt := s.recordUsageMultipliers(ctx, input.APIKey, user, input.PricingAt)
-	billingModel := s.recordUsageBillingModel(ctx, input.APIKey, input.Result, input.ChannelUsageFields)
+	billingModel := s.recordUsageBillingModel(ctx, input.APIKey, input.Result, input.ChannelUsageFields, input.FallbackBillingModel)
 	cost := s.calculateRecordUsageCost(ctx, input.Result, input.APIKey, billingModel, multiplier, imageMultiplier, pricingAt)
 	if cost == nil {
 		return 0
@@ -1162,6 +1171,15 @@ func (s *GatewayService) billableModelWithFallback(ctx context.Context, apiKey *
 	return billingModel
 }
 
+// HasResolvableBillingPricing reports whether model resolves to explicit channel/group pricing
+// or a built-in catalog/fallback token price.
+func (s *GatewayService) HasResolvableBillingPricing(ctx context.Context, model string, apiKey *APIKey) bool {
+	if s == nil {
+		return false
+	}
+	return s.hasResolvableTokenPricing(ctx, model, apiKey)
+}
+
 // hasResolvableTokenPricing 判断模型是否能在渠道定价或全局价格表中解析出 token 价格。
 func (s *GatewayService) hasResolvableTokenPricing(ctx context.Context, model string, apiKey *APIKey) bool {
 	if strings.TrimSpace(model) == "" {
@@ -1304,6 +1322,7 @@ func (usage ClaudeUsage) billingUsageTokens() UsageTokens {
 		AudioInputTokens:      usage.AudioInputTokens,
 		OutputTokens:          usage.OutputTokens,
 		AudioOutputTokens:     usage.AudioOutputTokens,
+		VideoOutputTokens:     usage.VideoOutputTokens,
 		CacheCreationTokens:   creationTokens,
 		CacheReadTokens:       usage.CacheReadInputTokens,
 		CacheCreation5mTokens: usage.CacheCreation5mTokens,
@@ -1425,8 +1444,12 @@ func (s *GatewayService) buildRecordUsageLog(
 		SubscriptionID:           optionalSubscriptionID(subscription),
 		CreatedAt:                time.Now(),
 	}
-	if isGeminiBatchUsageEndpoint(input.InboundEndpoint) {
+	if input.RequestType.IsValid() && input.RequestType != RequestTypeUnknown {
+		usageLog.RequestType = input.RequestType
+	} else if isGeminiBatchUsageEndpoint(input.InboundEndpoint) {
 		usageLog.RequestType = RequestTypeBatch
+	} else if isGeminiLiveUsageEndpoint(input.InboundEndpoint) {
+		usageLog.RequestType = RequestTypeLive
 	}
 	if result.ImageCount > 0 && (cost == nil || cost.BillingMode != string(BillingModeToken)) {
 		usageLog.RateMultiplier = imageMultiplier

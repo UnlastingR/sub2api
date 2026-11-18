@@ -797,3 +797,162 @@ func TestGeminiInteractionsPost_ExplicitStreamFalseAndQZeroAccept(t *testing.T) 
 	require.Equal(t, 33, logs[0].InputTokens)
 	require.Equal(t, 7, logs[0].OutputTokens)
 }
+
+func TestGeminiInteractionsCustomAgentBaseAgentFallbackBilling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("sync custom agent bills via cached base_agent", func(t *testing.T) {
+		h, _, _, usageRepo, _, account, originKey, _ := newInteractionBillingTestHandler(
+			t,
+			`{"id":"v1_custom_agent_sync","agent":"reg-test-agent","status":"completed","usage":{"total_input_tokens":5460,"total_output_tokens":38}}`,
+		)
+		h.geminiCompatService.BindGeminiExtResourcesFromJSON(
+			context.Background(),
+			[]byte(`{"id":"reg-test-agent","base_agent":"antigravity-preview-09-2026"}`),
+			"agent",
+			account.ID,
+			originKey.UserID,
+		)
+
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		body := `{"agent":"reg-test-agent","input":"hi"}`
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Set(string(middleware.ContextKeyAPIKey), originKey)
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: originKey.UserID, Concurrency: 1})
+
+		h.GeminiV1BetaInteractionsCreate(c)
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		logs := usageRepo.snapshot()
+		require.Len(t, logs, 1)
+		require.Equal(t, "reg-test-agent", logs[0].Model)
+		// antigravity-preview-09-2026: $0.75/1M input + $3.75/1M output
+		wantCost := 5460*0.75e-6 + 38*3.75e-6
+		require.InDelta(t, wantCost, logs[0].TotalCost, 1e-9)
+	})
+
+	t.Run("GET reconciliation preserves custom agent fallback_billing_model", func(t *testing.T) {
+		h, _, _, usageRepo, _, account, originKey, _ := newInteractionBillingTestHandler(
+			t,
+			`{"id":"v1_custom_agent_async","agent":"reg-test-agent","status":"completed","usage":{"total_input_tokens":5460,"total_output_tokens":38}}`,
+		)
+		gid := *originKey.GroupID
+		require.NoError(t, h.geminiCompatService.BindGeminiInteractionAccount(context.Background(), &gid, originKey.UserID, "v1_custom_agent_async", account.ID))
+		require.NoError(t, h.geminiCompatService.SaveGeminiInteractionMeta(context.Background(), "v1_custom_agent_async", service.GeminiInteractionMeta{
+			RequestModel:         "reg-test-agent",
+			UpstreamModel:        "reg-test-agent",
+			FallbackBillingModel: "antigravity-preview-09-2026",
+			APIKeyID:             originKey.ID,
+			UserID:               originKey.UserID,
+			AccountID:            account.ID,
+			PricingAtUnixNano:    time.Now().UnixNano(),
+		}))
+
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1beta/interactions/v1_custom_agent_async", nil)
+		c.Params = gin.Params{{Key: "interactionID", Value: "v1_custom_agent_async"}}
+		c.Set(string(middleware.ContextKeyAPIKey), originKey)
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: originKey.UserID, Concurrency: 1})
+
+		h.GeminiV1BetaInteractionsGet(c)
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		logs := usageRepo.snapshot()
+		require.Len(t, logs, 1)
+		require.Equal(t, "reg-test-agent", logs[0].Model)
+		wantCost := 5460*0.75e-6 + 38*3.75e-6
+		require.InDelta(t, wantCost, logs[0].TotalCost, 1e-9)
+	})
+
+	t.Run("mapped custom agent uses mapped target base_agent instead of source agent", func(t *testing.T) {
+		h, _, _, usageRepo, _, account, originKey, _ := newInteractionBillingTestHandler(
+			t,
+			`{"id":"v1_custom_agent_mapped","agent":"upstream-deep-agent","status":"completed","usage":{"total_input_tokens":1000000,"total_output_tokens":100000}}`,
+		)
+		account.Credentials["model_mapping"] = map[string]any{
+			"source-flash-agent": "upstream-deep-agent",
+		}
+		h.geminiCompatService.BindGeminiExtResourcesFromJSON(
+			context.Background(),
+			[]byte(`{"id":"source-flash-agent","base_agent":"antigravity-preview-09-2026"}`),
+			"agent",
+			account.ID,
+			originKey.UserID,
+		)
+		h.geminiCompatService.BindGeminiExtResourcesFromJSON(
+			context.Background(),
+			[]byte(`{"id":"upstream-deep-agent","base_agent":"deep-research-pro-preview-12-2025"}`),
+			"agent",
+			account.ID,
+			originKey.UserID,
+		)
+
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		body := `{"agent":"source-flash-agent","input":"research"}`
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Set(string(middleware.ContextKeyAPIKey), originKey)
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: originKey.UserID, Concurrency: 1})
+
+		h.GeminiV1BetaInteractionsCreate(c)
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		logs := usageRepo.snapshot()
+		require.Len(t, logs, 1)
+		// deep-research-pro-preview-12-2025 ($2/1M in, $10/1M out), NOT antigravity-preview-09-2026 ($0.75/$3.75)
+		wantCost := 1000000*2e-6 + 100000*10e-6
+		require.InDelta(t, wantCost, logs[0].TotalCost, 1e-9)
+	})
+
+	t.Run("resolved upstream mapping to another bound account uses target account and mapping back uses source base price", func(t *testing.T) {
+		h, _, _, usageRepo, _, account, originKey, _ := newInteractionBillingTestHandler(
+			t,
+			`{"id":"v1_custom_agent_roundtrip","agent":"source-agent","status":"completed","usage":{"total_input_tokens":1000000,"total_output_tokens":100000}}`,
+		)
+		account.Credentials["model_mapping"] = map[string]any{
+			"target-agent": "source-agent",
+		}
+		// source-agent bound to another account ID (e.g. legacy source account 9999), while channel mapped target-agent lives on account.ID.
+		h.geminiCompatService.BindGeminiExtResourcesFromJSON(
+			context.Background(),
+			[]byte(`{"id":"source-agent","base_agent":"antigravity-preview-09-2026"}`),
+			"agent",
+			account.ID+999,
+			originKey.UserID,
+		)
+		h.geminiCompatService.BindGeminiExtResourcesFromJSON(
+			context.Background(),
+			[]byte(`{"id":"target-agent","base_agent":"deep-research-pro-preview-12-2025"}`),
+			"agent",
+			account.ID,
+			originKey.UserID,
+		)
+
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", strings.NewReader(`{"agent":"source-agent","input":"roundtrip"}`))
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request = c.Request.WithContext(service.WithCompositeRouteDecision(c.Request.Context(), service.CompositeRouteDecision{
+			Matched:        true,
+			TargetPlatform: service.PlatformGemini,
+			PublicModel:    "source-agent",
+			UpstreamModel:  "target-agent",
+		}))
+		c.Set(string(middleware.ContextKeyAPIKey), originKey)
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: originKey.UserID, Concurrency: 1})
+
+		h.GeminiV1BetaInteractionsCreate(c)
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		logs := usageRepo.snapshot()
+		require.Len(t, logs, 1)
+		// Channel/route mapped source-agent -> target-agent (selected account.ID cleanly instead of failing on source's account),
+		// then account model_mapping mapped target-agent -> source-agent (must bill at source-agent's $0.75/$3.75, not target-agent's $2/$10).
+		wantCost := 1000000*0.75e-6 + 100000*3.75e-6
+		require.InDelta(t, wantCost, logs[0].TotalCost, 1e-9)
+	})
+}

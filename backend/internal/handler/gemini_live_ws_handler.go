@@ -10,8 +10,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -22,11 +25,27 @@ import (
 )
 
 const (
-	geminiLiveTokenMetaCtxKey = "gemini_live_token_meta"
-	geminiLiveRawTokenCtxKey  = "gemini_live_raw_token"
-	geminiLiveSetupTimeout    = 15 * time.Second
-	geminiLiveDialTimeout     = 20 * time.Second
+	geminiLiveTokenMetaCtxKey       = "gemini_live_token_meta"
+	geminiLiveRawTokenCtxKey        = "gemini_live_raw_token"
+	geminiLiveSetupTimeout          = 15 * time.Second
+	geminiLiveDialTimeout           = 20 * time.Second
+	maxGeminiLiveWSCloseReasonBytes = 123
 )
+
+func sanitizeGeminiLiveWSClose(code coderws.StatusCode, reason string) (coderws.StatusCode, string) {
+	valid := (code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1014) || (code >= 3000 && code <= 4999)
+	if !valid {
+		code = coderws.StatusNormalClosure
+	}
+	if len(reason) <= maxGeminiLiveWSCloseReasonBytes {
+		return code, reason
+	}
+	cut := maxGeminiLiveWSCloseReasonBytes
+	for cut > 0 && !utf8.ValidString(reason[:cut]) {
+		cut--
+	}
+	return code, reason[:cut]
+}
 
 // ExtractGeminiLiveConstrainedAccessToken extracts an ephemeral access_token from query string or Authorization header.
 func ExtractGeminiLiveConstrainedAccessToken(c *gin.Context) string {
@@ -96,6 +115,7 @@ func isExpectedGeminiLiveWSClose(err error) bool {
 }
 
 func (h *GatewayHandler) handleGeminiLiveWS(c *gin.Context, constrained bool) {
+	setOpsEndpointContext(c, "", int16(service.RequestTypeLive))
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok || apiKey == nil {
 		googleError(c, http.StatusUnauthorized, "Invalid API key")
@@ -326,6 +346,7 @@ func (h *GatewayHandler) handleGeminiLiveWS(c *gin.Context, constrained bool) {
 		}
 
 		mappedModel = account.GetMappedModel(routeModel)
+		setOpsEndpointContext(c, mappedModel, int16(service.RequestTypeLive))
 		dialCtx, cancelDial := context.WithTimeout(c.Request.Context(), geminiLiveDialTimeout)
 		upConn, statusCode, _, dialErr := h.geminiCompatService.DialGeminiLiveWS(dialCtx, account, constrained, c.Request.URL.Query(), upstreamEphemeralToken)
 		cancelDial()
@@ -375,7 +396,11 @@ func (h *GatewayHandler) handleGeminiLiveWS(c *gin.Context, constrained bool) {
 	sessionCtx, cancelSession := context.WithCancel(c.Request.Context())
 	defer cancelSession()
 
-	var wg sync.WaitGroup
+	var (
+		wg            sync.WaitGroup
+		clientEnded   atomic.Bool
+		upstreamEnded atomic.Bool
+	)
 	wg.Add(2)
 
 	// Client -> Upstream
@@ -385,8 +410,18 @@ func (h *GatewayHandler) handleGeminiLiveWS(c *gin.Context, constrained bool) {
 		for {
 			mt, payload, err := clientConn.Read(sessionCtx)
 			if err != nil {
+				clientEnded.Store(true)
 				if !isExpectedGeminiLiveWSClose(err) {
 					reqLog.Debug("gemini.live_ws.client_read_end", zap.Error(err))
+				}
+				if !upstreamEnded.Load() {
+					var closeErr coderws.CloseError
+					if errors.As(err, &closeErr) {
+						code, reason := sanitizeGeminiLiveWSClose(closeErr.Code, closeErr.Reason)
+						_ = upstreamConn.CloseWithStatus(code, reason)
+					} else if !errors.Is(err, context.Canceled) {
+						_ = upstreamConn.CloseWithStatus(coderws.StatusGoingAway, "client closed")
+					}
 				}
 				return
 			}
@@ -396,6 +431,8 @@ func (h *GatewayHandler) handleGeminiLiveWS(c *gin.Context, constrained bool) {
 					if msg == "" {
 						msg = "message blocked by security policy"
 					}
+					clientEnded.Store(true)
+					_ = upstreamConn.CloseWithStatus(coderws.StatusNormalClosure, "")
 					_ = clientConn.Close(coderws.StatusPolicyViolation, msg)
 					return
 				}
@@ -413,8 +450,37 @@ func (h *GatewayHandler) handleGeminiLiveWS(c *gin.Context, constrained bool) {
 		for {
 			mt, payload, err := upstreamConn.ReadFrame(sessionCtx)
 			if err != nil {
-				if !isExpectedGeminiLiveWSClose(err) {
-					reqLog.Debug("gemini.live_ws.upstream_read_end", zap.Error(err))
+				upstreamEnded.Store(true)
+				var closeErr coderws.CloseError
+				if errors.As(err, &closeErr) {
+					if closeErr.Code != coderws.StatusNormalClosure {
+						reqLog.Warn("gemini.live_ws.upstream_closed",
+							zap.Int("close_code", int(closeErr.Code)),
+							zap.String("close_reason", closeErr.Reason),
+							zap.String("model", reqModel),
+							zap.String("upstream_model", mappedModel),
+						)
+					} else {
+						reqLog.Debug("gemini.live_ws.upstream_read_end",
+							zap.Int("close_code", int(closeErr.Code)),
+							zap.String("close_reason", closeErr.Reason),
+						)
+					}
+					if !clientEnded.Load() {
+						code, reason := sanitizeGeminiLiveWSClose(closeErr.Code, closeErr.Reason)
+						_ = clientConn.Close(code, reason)
+					}
+				} else {
+					if !isExpectedGeminiLiveWSClose(err) {
+						reqLog.Warn("gemini.live_ws.upstream_read_end",
+							zap.Error(err),
+							zap.String("model", reqModel),
+							zap.String("upstream_model", mappedModel),
+						)
+					}
+					if !clientEnded.Load() && !errors.Is(err, context.Canceled) {
+						_ = clientConn.Close(coderws.StatusInternalError, "upstream closed unexpectedly")
+					}
 				}
 				return
 			}
@@ -448,6 +514,7 @@ func (h *GatewayHandler) handleGeminiLiveWS(c *gin.Context, constrained bool) {
 		billingSub := h.resolveGeminiExtSubscription(c, apiKey)
 		inboundEndpoint := c.Request.URL.Path
 		userAgent := c.GetHeader("User-Agent")
+		clientIP := ip.GetClientIP(c)
 		h.submitUsageRecordTask(context.WithoutCancel(c.Request.Context()), func(ctx context.Context) {
 			recCtx, cancel := context.WithTimeout(ctx, geminiExtOpTimeout)
 			defer cancel()
@@ -464,6 +531,8 @@ func (h *GatewayHandler) handleGeminiLiveWS(c *gin.Context, constrained bool) {
 				PricingAt:          requestStart,
 				APIKeyService:      h.apiKeyService,
 				UserAgent:          userAgent,
+				IPAddress:          clientIP,
+				RequestType:        service.RequestTypeLive,
 			}); err != nil {
 				logger.LegacyPrintf("handler.gemini_live_ws", "record gemini live usage failed: %v", err)
 			}

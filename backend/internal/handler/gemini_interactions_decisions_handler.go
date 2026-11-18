@@ -248,7 +248,11 @@ func (h *GatewayHandler) handleGeminiAIStudioPost(c *gin.Context, isDecisions bo
 		modelName = channelMapping.MappedModel
 	}
 
-	var boundAccountID int64
+	var (
+		boundAccountID       int64
+		customAgentID        string
+		fallbackBillingModel string
+	)
 	if !isDecisions && previousInteractionID != "" {
 		boundID, verified, resolveErr := h.geminiCompatService.ResolveGeminiInteractionAccount(
 			c.Request.Context(),
@@ -266,6 +270,31 @@ func (h *GatewayHandler) handleGeminiAIStudioPost(c *gin.Context, isDecisions bo
 			return
 		}
 		boundAccountID = boundID
+	}
+	if !isDecisions && h.geminiCompatService != nil {
+		customAgentID = service.ExtractGeminiInteractionAgentID(body)
+		if customAgentID != "" {
+			if srcBinding, srcFound := h.geminiCompatService.ResolveGeminiExtAgentBinding(c.Request.Context(), customAgentID); srcFound {
+				if srcBinding.UserID > 0 && srcBinding.UserID != authSubject.UserID {
+					googleError(c, http.StatusNotFound, "Agent not found")
+					return
+				}
+			}
+			// Pin account & resolve fallback pricing from the post-channel-mapping effective agent,
+			// so mapped requests do not stay pinned to the source agent's account or base price.
+			effectivePreSelectAgent := service.NormalizeGeminiAgentModelRef(modelName)
+			if effectivePreSelectAgent == "" {
+				effectivePreSelectAgent = customAgentID
+			}
+			if targetBinding, targetFound := h.geminiCompatService.ResolveGeminiExtAgentBinding(c.Request.Context(), effectivePreSelectAgent); targetFound {
+				if boundAccountID == 0 && targetBinding.AccountID > 0 {
+					boundAccountID = targetBinding.AccountID
+				}
+				if targetBinding.BaseAgent != "" {
+					fallbackBillingModel = targetBinding.BaseAgent
+				}
+			}
+		}
 	}
 
 	subscription, _ := middleware.GetSubscriptionFromContext(c)
@@ -398,6 +427,32 @@ func (h *GatewayHandler) handleGeminiAIStudioPost(c *gin.Context, isDecisions bo
 		accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
 
 		mappedModel := account.GetMappedModel(modelName)
+		attemptFallbackBilling := fallbackBillingModel
+		if !isDecisions && customAgentID != "" && h.geminiCompatService != nil {
+			effectiveAgent := service.NormalizeGeminiAgentModelRef(mappedModel)
+			if effectiveAgent == "" {
+				effectiveAgent = customAgentID
+			}
+			// If account model_mapping rewrote the agent to a different upstream agent (including mapping back to customAgentID),
+			// resolve from the effective upstream target instead of retaining pre-mapping metadata.
+			preAccountAgent := service.NormalizeGeminiAgentModelRef(modelName)
+			if preAccountAgent == "" {
+				preAccountAgent = customAgentID
+			}
+			if effectiveAgent != preAccountAgent {
+				attemptFallbackBilling = ""
+				if binding, ok := h.geminiCompatService.ResolveGeminiExtAgentBinding(c.Request.Context(), effectiveAgent); ok && binding.BaseAgent != "" {
+					attemptFallbackBilling = binding.BaseAgent
+				}
+			}
+			if attemptFallbackBilling == "" &&
+				!h.gatewayService.HasResolvableBillingPricing(c.Request.Context(), mappedModel, apiKey) &&
+				!h.gatewayService.HasResolvableBillingPricing(c.Request.Context(), reqModel, apiKey) {
+				fetchCtx, cancelFetch := context.WithTimeout(c.Request.Context(), 5*time.Second)
+				attemptFallbackBilling = h.geminiCompatService.FetchGeminiAgentBaseModel(fetchCtx, account, effectiveAgent)
+				cancelFetch()
+			}
+		}
 		requestCtx := c.Request.Context()
 		if fs.SwitchCount > 0 {
 			requestCtx = service.WithAccountSwitchCount(requestCtx, fs.SwitchCount, h.metadataBridgeEnabled())
@@ -425,22 +480,23 @@ func (h *GatewayHandler) handleGeminiAIStudioPost(c *gin.Context, isDecisions bo
 				subID = &idCopy
 			}
 			meta := service.GeminiInteractionMeta{
-				RequestModel:       reqModel,
-				UpstreamModel:      mappedModel,
-				ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, mappedModel),
-				PricingAtUnixNano:  pricingAt.UnixNano(),
-				ForceCacheBilling:  fs.ForceCacheBilling,
-				APIKeyID:           apiKey.ID,
-				UserID:             authSubject.UserID,
-				AccountID:          account.ID,
-				SubscriptionID:     subID,
-				RequestPayloadHash: service.HashUsageRequestPayload(body),
-				InboundEndpoint:    GetInboundEndpoint(c),
-				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
-				QuotaPlatform:      service.QuotaPlatform(c.Request.Context(), apiKey),
-				UserAgent:          c.GetHeader("User-Agent"),
-				ClientIP:           ip.GetClientIP(c),
-				SessionID:          service.ExtractClientSessionID(c),
+				RequestModel:         reqModel,
+				UpstreamModel:        mappedModel,
+				FallbackBillingModel: attemptFallbackBilling,
+				ChannelUsageFields:   clientRequestedUsageFields(c, channelMapping, reqModel, mappedModel),
+				PricingAtUnixNano:    pricingAt.UnixNano(),
+				ForceCacheBilling:    fs.ForceCacheBilling,
+				APIKeyID:             apiKey.ID,
+				UserID:               authSubject.UserID,
+				AccountID:            account.ID,
+				SubscriptionID:       subID,
+				RequestPayloadHash:   service.HashUsageRequestPayload(body),
+				InboundEndpoint:      GetInboundEndpoint(c),
+				UpstreamEndpoint:     GetUpstreamEndpoint(c, account.Platform),
+				QuotaPlatform:        service.QuotaPlatform(c.Request.Context(), apiKey),
+				UserAgent:            c.GetHeader("User-Agent"),
+				ClientIP:             ip.GetClientIP(c),
+				SessionID:            service.ExtractClientSessionID(c),
 			}
 			if metaErr := h.geminiCompatService.SaveGeminiInteractionMeta(bindCtx, id, meta); metaErr != nil {
 				allOK = false
@@ -481,6 +537,7 @@ func (h *GatewayHandler) handleGeminiAIStudioPost(c *gin.Context, isDecisions bo
 			if !isDecisions && boundInteractionID != "" && h.gatewayService != nil && h.geminiCompatService != nil {
 				channelUsageFields := clientRequestedUsageFields(c, channelMapping, reqModel, mappedModel)
 				snap := captureGeminiInteractionUsageSnapshot(c, apiKey, account, subscription, authSubject.UserID, pricingAt, reqModel, mappedModel, channelUsageFields, fs.ForceCacheBilling, body)
+				snap.fallbackBillingModel = attemptFallbackBilling
 				handoffInflight := inflightRelease
 				inflightRelease = nil
 				go h.reconcileGeminiInteractionUsage(snap, boundInteractionID, handoffInflight)
@@ -509,7 +566,7 @@ func (h *GatewayHandler) handleGeminiAIStudioPost(c *gin.Context, isDecisions bo
 				}
 			}
 			channelUsageFields := clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel)
-			h.recordGeminiAIStudioUsage(c, apiKey, account, subscription, pricingAt, result, body, channelUsageFields, fs.ForceCacheBilling, component, pendingInteractionID)
+			h.recordGeminiAIStudioUsage(c, apiKey, account, subscription, pricingAt, result, body, channelUsageFields, fs.ForceCacheBilling, component, pendingInteractionID, attemptFallbackBilling)
 			return
 		}
 
@@ -523,6 +580,7 @@ func (h *GatewayHandler) handleGeminiAIStudioPost(c *gin.Context, isDecisions bo
 		if (!result.InteractionTerminal || (result.Stream && !hasBillableGeminiResult(result))) && h.gatewayService != nil && h.geminiCompatService != nil {
 			channelUsageFields := clientRequestedUsageFields(c, channelMapping, reqModel, mappedModel)
 			snap := captureGeminiInteractionUsageSnapshot(c, apiKey, account, subscription, authSubject.UserID, pricingAt, reqModel, mappedModel, channelUsageFields, fs.ForceCacheBilling, body)
+			snap.fallbackBillingModel = attemptFallbackBilling
 			handoffInflight := inflightRelease
 			inflightRelease = nil
 			go h.reconcileGeminiInteractionUsage(snap, pendingInteractionID, handoffInflight)
@@ -790,23 +848,24 @@ func (h *GatewayHandler) acquireGeminiEndpointAccountSlot(
 }
 
 type geminiInteractionUsageSnapshot struct {
-	parentCtx          context.Context
-	apiKey             *service.APIKey
-	account            *service.Account
-	subscription       *service.UserSubscription
-	userID             int64
-	pricingAt          time.Time
-	requestModel       string
-	upstreamModel      string
-	channelUsageFields service.ChannelUsageFields
-	forceCacheBilling  bool
-	requestPayloadHash string
-	inboundEndpoint    string
-	upstreamEndpoint   string
-	quotaPlatform      string
-	userAgent          string
-	clientIP           string
-	sessionID          string
+	parentCtx            context.Context
+	apiKey               *service.APIKey
+	account              *service.Account
+	subscription         *service.UserSubscription
+	userID               int64
+	pricingAt            time.Time
+	requestModel         string
+	upstreamModel        string
+	fallbackBillingModel string
+	channelUsageFields   service.ChannelUsageFields
+	forceCacheBilling    bool
+	requestPayloadHash   string
+	inboundEndpoint      string
+	upstreamEndpoint     string
+	quotaPlatform        string
+	userAgent            string
+	clientIP             string
+	sessionID            string
 }
 
 func captureGeminiInteractionUsageSnapshot(
@@ -1044,6 +1103,9 @@ func (h *GatewayHandler) settleGeminiInteractionResponse(
 		snap.channelUsageFields = meta.ChannelUsageFields
 		snap.requestModel = meta.RequestModel
 		snap.upstreamModel = meta.UpstreamModel
+		if meta.FallbackBillingModel != "" {
+			snap.fallbackBillingModel = meta.FallbackBillingModel
+		}
 		if meta.UserID > 0 {
 			snap.userID = meta.UserID
 		}
@@ -1091,22 +1153,23 @@ func (h *GatewayHandler) recordGeminiInteractionUsageSync(
 		user = snap.apiKey.User
 	}
 	if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
-		Result:             result,
-		QuotaPlatform:      snap.quotaPlatform,
-		APIKey:             snap.apiKey,
-		User:               user,
-		Account:            snap.account,
-		Subscription:       snap.subscription,
-		PricingAt:          snap.pricingAt,
-		InboundEndpoint:    snap.inboundEndpoint,
-		UpstreamEndpoint:   snap.upstreamEndpoint,
-		UserAgent:          snap.userAgent,
-		IPAddress:          snap.clientIP,
-		RequestPayloadHash: snap.requestPayloadHash,
-		ForceCacheBilling:  snap.forceCacheBilling,
-		APIKeyService:      h.apiKeyService,
-		SessionID:          snap.sessionID,
-		ChannelUsageFields: snap.channelUsageFields,
+		Result:               result,
+		QuotaPlatform:        snap.quotaPlatform,
+		APIKey:               snap.apiKey,
+		User:                 user,
+		Account:              snap.account,
+		Subscription:         snap.subscription,
+		PricingAt:            snap.pricingAt,
+		InboundEndpoint:      snap.inboundEndpoint,
+		UpstreamEndpoint:     snap.upstreamEndpoint,
+		UserAgent:            snap.userAgent,
+		IPAddress:            snap.clientIP,
+		RequestPayloadHash:   snap.requestPayloadHash,
+		ForceCacheBilling:    snap.forceCacheBilling,
+		APIKeyService:        h.apiKeyService,
+		SessionID:            snap.sessionID,
+		FallbackBillingModel: snap.fallbackBillingModel,
+		ChannelUsageFields:   snap.channelUsageFields,
 	}); err != nil {
 		if interactionIDForRetry != "" && h.geminiCompatService != nil {
 			_ = h.geminiCompatService.ReleaseGeminiInteractionBilled(ctx, interactionIDForRetry)
@@ -1192,12 +1255,14 @@ func (h *GatewayHandler) recordGeminiAIStudioUsage(
 	forceCacheBilling bool,
 	component string,
 	interactionIDForRetry string,
+	fallbackBillingModel string,
 ) {
 	if h.gatewayService == nil || result == nil {
 		return
 	}
 	authSubject, _ := middleware.GetAuthSubjectFromContext(c)
 	snap := captureGeminiInteractionUsageSnapshot(c, apiKey, account, subscription, authSubject.UserID, pricingAt, result.Model, result.UpstreamModel, channelUsageFields, forceCacheBilling, body)
+	snap.fallbackBillingModel = fallbackBillingModel
 	task := h.buildGeminiRecordUsageTask(snap, result, interactionIDForRetry, component)
 	if interactionIDForRetry != "" {
 		h.submitMandatoryUsageRecordTask(c.Request.Context(), task)
@@ -1295,22 +1360,23 @@ func (h *GatewayHandler) ensureGeminiInteractionPendingEnqueued(
 			upModel = snap.channelUsageFields.ChannelMappedModel
 		}
 		_ = h.geminiCompatService.SaveGeminiInteractionMeta(ctx, interactionID, service.GeminiInteractionMeta{
-			RequestModel:       reqModel,
-			UpstreamModel:      upModel,
-			ChannelUsageFields: snap.channelUsageFields,
-			PricingAtUnixNano:  snap.pricingAt.UnixNano(),
-			ForceCacheBilling:  snap.forceCacheBilling,
-			APIKeyID:           apiKeyID,
-			UserID:             snap.userID,
-			AccountID:          acctID,
-			SubscriptionID:     subID,
-			RequestPayloadHash: snap.requestPayloadHash,
-			InboundEndpoint:    snap.inboundEndpoint,
-			UpstreamEndpoint:   snap.upstreamEndpoint,
-			QuotaPlatform:      snap.quotaPlatform,
-			UserAgent:          snap.userAgent,
-			ClientIP:           snap.clientIP,
-			SessionID:          snap.sessionID,
+			RequestModel:         reqModel,
+			UpstreamModel:        upModel,
+			FallbackBillingModel: snap.fallbackBillingModel,
+			ChannelUsageFields:   snap.channelUsageFields,
+			PricingAtUnixNano:    snap.pricingAt.UnixNano(),
+			ForceCacheBilling:    snap.forceCacheBilling,
+			APIKeyID:             apiKeyID,
+			UserID:               snap.userID,
+			AccountID:            acctID,
+			SubscriptionID:       subID,
+			RequestPayloadHash:   snap.requestPayloadHash,
+			InboundEndpoint:      snap.inboundEndpoint,
+			UpstreamEndpoint:     snap.upstreamEndpoint,
+			QuotaPlatform:        snap.quotaPlatform,
+			UserAgent:            snap.userAgent,
+			ClientIP:             snap.clientIP,
+			SessionID:            snap.sessionID,
 		})
 	}
 	_ = h.geminiCompatService.ScheduleGeminiInteractionPending(ctx, interactionID, nextCheckAt)
@@ -1532,23 +1598,24 @@ func (h *GatewayHandler) ReconcilePendingGeminiInteractions(ctx context.Context)
 			userID = billingAPIKey.UserID
 		}
 		snap := geminiInteractionUsageSnapshot{
-			parentCtx:          context.Background(),
-			apiKey:             billingAPIKey,
-			account:            account,
-			subscription:       billingSubscription,
-			userID:             userID,
-			pricingAt:          pricingAt,
-			requestModel:       meta.RequestModel,
-			upstreamModel:      meta.UpstreamModel,
-			channelUsageFields: meta.ChannelUsageFields,
-			forceCacheBilling:  meta.ForceCacheBilling,
-			requestPayloadHash: meta.RequestPayloadHash,
-			inboundEndpoint:    meta.InboundEndpoint,
-			upstreamEndpoint:   meta.UpstreamEndpoint,
-			quotaPlatform:      meta.QuotaPlatform,
-			userAgent:          meta.UserAgent,
-			clientIP:           meta.ClientIP,
-			sessionID:          meta.SessionID,
+			parentCtx:            context.Background(),
+			apiKey:               billingAPIKey,
+			account:              account,
+			subscription:         billingSubscription,
+			userID:               userID,
+			pricingAt:            pricingAt,
+			requestModel:         meta.RequestModel,
+			upstreamModel:        meta.UpstreamModel,
+			fallbackBillingModel: meta.FallbackBillingModel,
+			channelUsageFields:   meta.ChannelUsageFields,
+			forceCacheBilling:    meta.ForceCacheBilling,
+			requestPayloadHash:   meta.RequestPayloadHash,
+			inboundEndpoint:      meta.InboundEndpoint,
+			upstreamEndpoint:     meta.UpstreamEndpoint,
+			quotaPlatform:        meta.QuotaPlatform,
+			userAgent:            meta.UserAgent,
+			clientIP:             meta.ClientIP,
+			sessionID:            meta.SessionID,
 		}
 		_ = h.runMandatoryGeminiRecordUsage(snap, res, interactionID, "handler.gemini_v1beta.interactions.sweep")
 	}

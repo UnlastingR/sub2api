@@ -38,6 +38,7 @@ const (
 	geminiBatchPendingTTL    = 7 * 24 * time.Hour
 
 	geminiExtResKeyPrefix      = "gemini:ext:res:v1:"
+	geminiAgentBasePrefix      = "gemini:ext:agentbase:v1:"
 	geminiUploadSessionPrefix  = "gemini:ext:upload:v1:"
 	geminiAuthTokenPrefix      = "gemini:ext:authtoken:v1:"
 	geminiBatchMetaPrefix      = "gemini:batch:meta:v1:"
@@ -71,8 +72,9 @@ var geminiExtPassThroughUploadHeaders = []string{
 
 // GeminiExtResourceBinding records owning upstream account and gateway user for an external Gemini resource.
 type GeminiExtResourceBinding struct {
-	AccountID int64 `json:"account_id"`
-	UserID    int64 `json:"user_id"`
+	AccountID int64  `json:"account_id"`
+	UserID    int64  `json:"user_id"`
+	BaseAgent string `json:"base_agent,omitempty"`
 }
 
 // GeminiUploadSession stores resumable upload state keyed by gateway-issued upload_id.
@@ -589,15 +591,154 @@ func (s *GeminiMessagesCompatService) bindGeminiResourceByName(ctx context.Conte
 	}
 }
 
+// NormalizeGeminiAgentModelRef trims resource prefixes ("agents/", "models/") from a Gemini agent or model ref.
+func NormalizeGeminiAgentModelRef(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.TrimPrefix(trimmed, "agents/")
+	trimmed = strings.TrimPrefix(trimmed, "models/")
+	trimmed = strings.TrimSpace(trimmed)
+	if strings.Contains(trimmed, "/") {
+		return ""
+	}
+	return trimmed
+}
+
+func normalizeGeminiAgentModelRef(raw string) string {
+	return NormalizeGeminiAgentModelRef(raw)
+}
+
+func geminiAgentBaseCacheKey(accountID int64, agentID string) string {
+	return geminiAgentBasePrefix + strconv.FormatInt(accountID, 10) + ":" + agentID
+}
+
+// ExtractGeminiAgentBaseModelFromJSON extracts the underlying billable base agent/model from an Agent JSON payload.
+func ExtractGeminiAgentBaseModelFromJSON(data []byte) string {
+	if len(data) == 0 || !gjson.ValidBytes(data) {
+		return ""
+	}
+	for _, key := range []string{"base_agent", "baseAgent", "agent_config.model", "agentConfig.model", "model"} {
+		if ref := normalizeGeminiAgentModelRef(gjson.GetBytes(data, key).String()); ref != "" {
+			return ref
+		}
+	}
+	return ""
+}
+
+// ResolveGeminiExtAgentBinding returns full agent binding metadata (including BaseAgent if known).
+func (s *GeminiMessagesCompatService) ResolveGeminiExtAgentBinding(ctx context.Context, agentID string) (GeminiExtResourceBinding, bool) {
+	id := normalizeGeminiAgentModelRef(agentID)
+	if s == nil || s.cache == nil || !IsSafeGeminiExtID(id) {
+		return GeminiExtResourceBinding{}, false
+	}
+	raw, err := s.cache.GetGrokVideoPendingBilling(ctx, geminiExtBindingCacheKey("agent", id))
+	if err != nil || len(raw) == 0 {
+		return GeminiExtResourceBinding{}, false
+	}
+	var binding GeminiExtResourceBinding
+	if err := json.Unmarshal(raw, &binding); err != nil || binding.AccountID <= 0 {
+		return GeminiExtResourceBinding{}, false
+	}
+	binding.BaseAgent = normalizeGeminiAgentModelRef(binding.BaseAgent)
+	return binding, true
+}
+
+// BindGeminiExtAgent stores account/user ownership and optional BaseAgent for a custom Gemini agent ID.
+func (s *GeminiMessagesCompatService) BindGeminiExtAgent(ctx context.Context, agentID string, accountID, userID int64, baseAgent string) {
+	id := normalizeGeminiAgentModelRef(agentID)
+	if s == nil || s.cache == nil || !IsSafeGeminiExtID(id) || accountID <= 0 {
+		return
+	}
+	raw, err := json.Marshal(GeminiExtResourceBinding{
+		AccountID: accountID,
+		UserID:    userID,
+		BaseAgent: normalizeGeminiAgentModelRef(baseAgent),
+	})
+	if err != nil {
+		return
+	}
+	_ = s.cache.SetGrokVideoPendingBilling(ctx, geminiExtBindingCacheKey("agent", id), raw, geminiExtResourceTTL)
+}
+
+// FetchGeminiAgentBaseModel resolves a custom agent's base_agent via a separate pricing cache or
+// GET /v1beta/agents/{agentID} on account, without mutating resource ownership bindings.
+func (s *GeminiMessagesCompatService) FetchGeminiAgentBaseModel(ctx context.Context, account *Account, agentID string) string {
+	id := normalizeGeminiAgentModelRef(agentID)
+	if s == nil || account == nil || !IsSafeGeminiExtID(id) {
+		return ""
+	}
+	if s.cache != nil {
+		if cached, err := s.cache.GetGrokVideoPendingBilling(ctx, geminiAgentBaseCacheKey(account.ID, id)); err == nil && len(cached) > 0 {
+			if baseModel := normalizeGeminiAgentModelRef(string(cached)); baseModel != "" {
+				return baseModel
+			}
+		}
+	}
+	if s.httpUpstream == nil {
+		return ""
+	}
+	targetURL, err := s.buildGeminiAIStudioExtURL(account, "/v1beta/agents/"+id, nil)
+	if err != nil {
+		return ""
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Accept", "application/json")
+	if err := s.setGeminiAIStudioAuthHeaders(ctx, account, req.Header); err != nil {
+		return ""
+	}
+	resp, err := s.httpUpstream.Do(req, resolveAccountProxyURL(account), account.ID, account.Concurrency)
+	if err != nil || resp == nil {
+		return ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ""
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil || len(body) == 0 {
+		return ""
+	}
+	baseModel := ExtractGeminiAgentBaseModelFromJSON(body)
+	if baseModel != "" && s.cache != nil {
+		_ = s.cache.SetGrokVideoPendingBilling(ctx, geminiAgentBaseCacheKey(account.ID, id), []byte(baseModel), geminiAuthTokenTTL)
+	}
+	return baseModel
+}
+
 // BindGeminiExtResourcesFromJSON extracts resource names from single-object JSON responses and pins ownership.
 func (s *GeminiMessagesCompatService) BindGeminiExtResourcesFromJSON(ctx context.Context, data []byte, defaultKind string, accountID, userID int64) {
 	if s == nil || s.cache == nil || accountID <= 0 || len(data) == 0 || !gjson.ValidBytes(data) {
 		return
 	}
+	agentBase := ExtractGeminiAgentBaseModelFromJSON(data)
 	for _, field := range []string{"name", "id", "file.name", "metadata.name", "response.name", "output.responsesFile", "response.responsesFile"} {
 		if val := strings.TrimSpace(gjson.GetBytes(data, field).String()); val != "" {
-			if strings.Contains(val, "/") {
+			if strings.HasPrefix(val, "agents/") {
+				agentID := strings.TrimPrefix(val, "agents/")
+				if IsSafeGeminiExtID(agentID) {
+					baseToStore := agentBase
+					if baseToStore == "" {
+						if prev, ok := s.ResolveGeminiExtAgentBinding(ctx, agentID); ok {
+							baseToStore = prev.BaseAgent
+						}
+					}
+					s.BindGeminiExtAgent(ctx, agentID, accountID, userID, baseToStore)
+				}
+			} else if strings.Contains(val, "/") {
 				s.bindGeminiResourceByName(ctx, val, accountID, userID)
+			} else if defaultKind == "agent" && IsSafeGeminiExtID(val) {
+				baseToStore := agentBase
+				if baseToStore == "" {
+					if prev, ok := s.ResolveGeminiExtAgentBinding(ctx, val); ok {
+						baseToStore = prev.BaseAgent
+					}
+				}
+				s.BindGeminiExtAgent(ctx, val, accountID, userID, baseToStore)
 			} else if defaultKind != "" && IsSafeGeminiExtID(val) {
 				s.BindGeminiExtResourceAccount(ctx, defaultKind, val, accountID, userID, geminiExtResourceTTLForKind(defaultKind))
 			}

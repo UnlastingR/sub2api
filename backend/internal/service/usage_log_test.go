@@ -83,6 +83,31 @@ func TestGeminiBatchRequestTypeForExistingUsage(t *testing.T) {
 	require.False(t, batch.OpenAIWSMode)
 }
 
+func TestGeminiLiveRequestTypeForExistingUsage(t *testing.T) {
+	t.Parallel()
+
+	for _, endpoint := range []string{
+		geminiLiveBidiPath,
+		geminiLiveBidiConstrainedPath,
+		geminiLiveAliasPath,
+	} {
+		require.True(t, isGeminiLiveUsageEndpoint(endpoint))
+		for _, previousType := range []RequestType{RequestTypeUnknown, RequestTypeStream, RequestTypeLive} {
+			log := &UsageLog{RequestType: previousType, InboundEndpoint: &endpoint, Stream: true}
+			require.Equal(t, RequestTypeLive, log.EffectiveRequestType())
+		}
+	}
+
+	normalStreamEndpoint := "/v1beta/models/gemini-2.5-flash:streamGenerateContent"
+	require.False(t, isGeminiLiveUsageEndpoint(normalStreamEndpoint))
+	normalStream := &UsageLog{RequestType: RequestTypeStream, InboundEndpoint: &normalStreamEndpoint, Stream: true}
+	require.Equal(t, RequestTypeStream, normalStream.EffectiveRequestType())
+
+	liveEndpoint := geminiLiveBidiPath
+	cyber := &UsageLog{RequestType: RequestTypeCyberBlocked, InboundEndpoint: &liveEndpoint}
+	require.Equal(t, RequestTypeCyberBlocked, cyber.EffectiveRequestType())
+}
+
 func TestRequestTypeFromLegacy(t *testing.T) {
 	t.Parallel()
 

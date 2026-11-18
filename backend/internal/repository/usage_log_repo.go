@@ -225,6 +225,8 @@ func buildRequestTypeFilterCondition(startArgIndex int, requestType int16) (stri
 	return buildRequestTypeFilterConditionWithAlias(startArgIndex, requestType, "")
 }
 
+const legacyGeminiLiveEndpointsSQL = "('/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent', '/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained', '/v1beta/live')"
+
 func buildRequestTypeFilterConditionWithAlias(startArgIndex int, requestType int16, alias string) (string, []any) {
 	normalized := service.RequestTypeFromInt16(requestType)
 	requestTypeArg := int16(normalized)
@@ -239,6 +241,7 @@ func buildRequestTypeFilterConditionWithAlias(startArgIndex int, requestType int
 		endpoint + " LIKE '%:batchGenerateContent' OR " +
 		endpoint + " LIKE '%:asyncBatchEmbedContent' OR " +
 		endpoint + " LIKE '%:asyncBatchEmbedContents'))"
+	legacyGeminiLive := endpoint + " IN " + legacyGeminiLiveEndpointsSQL
 	switch normalized {
 	case service.RequestTypeSync:
 		condition := fmt.Sprintf("(%srequest_type = $%d OR (%srequest_type = %d AND %sstream = FALSE AND %sopenai_ws_mode = FALSE))", prefix, startArgIndex, prefix, int16(service.RequestTypeUnknown), prefix, prefix)
@@ -246,7 +249,10 @@ func buildRequestTypeFilterConditionWithAlias(startArgIndex int, requestType int
 	case service.RequestTypeBatch:
 		return fmt.Sprintf("(%srequest_type = $%d OR (%srequest_type IN (%d, %d) AND %s))", prefix, startArgIndex, prefix, int16(service.RequestTypeUnknown), int16(service.RequestTypeSync), legacyBatch), []any{requestTypeArg}
 	case service.RequestTypeStream:
-		return fmt.Sprintf("(%srequest_type = $%d OR (%srequest_type = %d AND %sstream = TRUE AND %sopenai_ws_mode = FALSE))", prefix, startArgIndex, prefix, int16(service.RequestTypeUnknown), prefix, prefix), []any{requestTypeArg}
+		condition := fmt.Sprintf("(%srequest_type = $%d OR (%srequest_type = %d AND %sstream = TRUE AND %sopenai_ws_mode = FALSE))", prefix, startArgIndex, prefix, int16(service.RequestTypeUnknown), prefix, prefix)
+		return condition + " AND NOT " + legacyGeminiLive, []any{requestTypeArg}
+	case service.RequestTypeLive:
+		return fmt.Sprintf("(%srequest_type = $%d OR (%srequest_type IN (%d, %d) AND %s))", prefix, startArgIndex, prefix, int16(service.RequestTypeUnknown), int16(service.RequestTypeStream), legacyGeminiLive), []any{requestTypeArg}
 	case service.RequestTypeWSV2:
 		return fmt.Sprintf("(%srequest_type = $%d OR (%srequest_type = %d AND %sopenai_ws_mode = TRUE))", prefix, startArgIndex, prefix, int16(service.RequestTypeUnknown), prefix), []any{requestTypeArg}
 	default:

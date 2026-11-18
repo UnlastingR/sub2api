@@ -3,7 +3,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -288,4 +292,34 @@ func TestObserveGeminiImageOutputs_FileDataCumulativeChunks(t *testing.T) {
 	require.Equal(t, 1, observedGeminiImageOutputs(c))
 	beginGeminiImageOutputObservation(c)
 	require.Zero(t, observedGeminiImageOutputs(c))
+}
+
+func makeEncodedPNG(t *testing.T, width, height int) string {
+	t.Helper()
+	var buf bytes.Buffer
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	require.NoError(t, png.Encode(&buf, img))
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
+func TestObserveGeminiImageOutputs_DecodesPNGDimensionsAndResolves1K(t *testing.T) {
+	c := newGeminiImageTestContext(t)
+	beginGeminiImageOutputObservation(c)
+	png1K := makeEncodedPNG(t, 1024, 1024)
+	payload := []byte(geminiImageResponse(`{"inlineData":{"mimeType":"image/png","data":"` + png1K + `"}}`))
+	observeGeminiImageOutputs(c, payload)
+	require.Equal(t, 1, observedGeminiImageOutputs(c))
+	require.Equal(t, []string{"1024x1024"}, observedGeminiImageOutputSizes(c))
+
+	res := &ForwardResult{
+		ImageCount:       observedGeminiImageOutputs(c),
+		ImageOutputSizes: observedGeminiImageOutputSizes(c),
+	}
+	ApplyForwardImageBillingResolution(res)
+	require.Equal(t, "1K", res.ImageSize)
+	require.Equal(t, "1024x1024", res.ImageOutputSize)
+	require.Equal(t, ImageSizeSourceOutput, res.ImageSizeSource)
+
+	png2K := makeEncodedPNG(t, 2048, 2048)
+	require.Equal(t, "2048x2048", decodeGeminiImageDimensions(png2K))
 }

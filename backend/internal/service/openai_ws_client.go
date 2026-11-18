@@ -380,11 +380,15 @@ func (*coderOpenAIWSClientConn) RequiresReaderLoop() bool {
 }
 
 func (c *coderOpenAIWSClientConn) Close() error {
+	return c.CloseWithStatus(coderws.StatusNormalClosure, "")
+}
+
+func (c *coderOpenAIWSClientConn) CloseWithStatus(code coderws.StatusCode, reason string) error {
 	if c == nil || c.conn == nil {
 		return nil
 	}
 	// Close 为幂等，忽略重复关闭错误。
-	_ = c.conn.Close(coderws.StatusNormalClosure, "")
+	_ = c.conn.Close(code, reason)
 	_ = c.conn.CloseNow()
 	return nil
 }

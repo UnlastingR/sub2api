@@ -56,6 +56,7 @@ describe('formatUsageOutputRate', () => {
     { image_output_tokens: 100 },
     { billing_mode: 'image' },
     { request_type: 'live' as const },
+    { request_type: 'stream' as const, inbound_endpoint: '/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent' },
     { request_type: 'unknown' as const },
   ])('omits non-text or unknown request rates: %j', (fields) => {
     expect(formatUsageOutputRate({ ...row, ...fields })).toBe('—')

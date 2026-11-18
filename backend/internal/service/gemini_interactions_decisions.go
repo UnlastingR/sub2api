@@ -60,22 +60,39 @@ func GeminiInteractionBillingRequestID(interactionID string) string {
 // GeminiInteractionMeta preserves creation-time billing and channel mapping metadata
 // so deferred background GET polling and delayed reconciliation bill identically to synchronous responses.
 type GeminiInteractionMeta struct {
-	RequestModel       string             `json:"request_model,omitempty"`
-	UpstreamModel      string             `json:"upstream_model,omitempty"`
-	ChannelUsageFields ChannelUsageFields `json:"channel_usage_fields,omitempty"`
-	PricingAtUnixNano  int64              `json:"pricing_at_unix_nano,omitempty"`
-	ForceCacheBilling  bool               `json:"force_cache_billing,omitempty"`
-	APIKeyID           int64              `json:"api_key_id,omitempty"`
-	UserID             int64              `json:"user_id,omitempty"`
-	AccountID          int64              `json:"account_id,omitempty"`
-	SubscriptionID     *int64             `json:"subscription_id,omitempty"`
-	RequestPayloadHash string             `json:"request_payload_hash,omitempty"`
-	InboundEndpoint    string             `json:"inbound_endpoint,omitempty"`
-	UpstreamEndpoint   string             `json:"upstream_endpoint,omitempty"`
-	QuotaPlatform      string             `json:"quota_platform,omitempty"`
-	UserAgent          string             `json:"user_agent,omitempty"`
-	ClientIP           string             `json:"client_ip,omitempty"`
-	SessionID          string             `json:"session_id,omitempty"`
+	RequestModel         string             `json:"request_model,omitempty"`
+	UpstreamModel        string             `json:"upstream_model,omitempty"`
+	FallbackBillingModel string             `json:"fallback_billing_model,omitempty"`
+	ChannelUsageFields   ChannelUsageFields `json:"channel_usage_fields,omitempty"`
+	PricingAtUnixNano    int64              `json:"pricing_at_unix_nano,omitempty"`
+	ForceCacheBilling    bool               `json:"force_cache_billing,omitempty"`
+	APIKeyID             int64              `json:"api_key_id,omitempty"`
+	UserID               int64              `json:"user_id,omitempty"`
+	AccountID            int64              `json:"account_id,omitempty"`
+	SubscriptionID       *int64             `json:"subscription_id,omitempty"`
+	RequestPayloadHash   string             `json:"request_payload_hash,omitempty"`
+	InboundEndpoint      string             `json:"inbound_endpoint,omitempty"`
+	UpstreamEndpoint     string             `json:"upstream_endpoint,omitempty"`
+	QuotaPlatform        string             `json:"quota_platform,omitempty"`
+	UserAgent            string             `json:"user_agent,omitempty"`
+	ClientIP             string             `json:"client_ip,omitempty"`
+	SessionID            string             `json:"session_id,omitempty"`
+}
+
+// ExtractGeminiInteractionAgentID extracts the normalized custom agent ID when an Interactions
+// request targets `agent` without an explicit `model`.
+func ExtractGeminiInteractionAgentID(body []byte) string {
+	if !gjson.ValidBytes(body) {
+		return ""
+	}
+	if strings.TrimSpace(gjson.GetBytes(body, "model").String()) != "" {
+		return ""
+	}
+	agentID := normalizeGeminiAgentModelRef(gjson.GetBytes(body, "agent").String())
+	if !IsSafeGeminiExtID(agentID) {
+		return ""
+	}
+	return agentID
 }
 
 // GeminiInteractionPendingIndex persists unresolved interaction IDs across
@@ -748,6 +765,7 @@ func (s *GeminiMessagesCompatService) forwardGeminiAIStudioEndpoint(
 		}
 		observeGeminiInteractionModel(observer, respBody, true)
 		imageCount = countGeminiInteractionImages(respBody)
+		imageOutputSizes := extractGeminiInteractionImageOutputSizes(respBody)
 		_, isTerminalStatus, hasStatus := extractGeminiInteractionTerminalStatus(respBody)
 		if hasStatus {
 			interactionTerminal = isTerminalStatus
@@ -761,6 +779,37 @@ func (s *GeminiMessagesCompatService) forwardGeminiAIStudioEndpoint(
 		if spec.OnResponseJSON != nil {
 			spec.OnResponseJSON(respBody)
 		}
+		if usage == nil {
+			usage = &ClaudeUsage{}
+		}
+		model := spec.OriginalModel
+		if model == "" {
+			model = observedModel
+		}
+		upstreamModel := spec.MappedModel
+		if upstreamModel == "" {
+			upstreamModel = observedModel
+		}
+		if imageCount == 0 && (isImageGenerationModel(model) || isImageGenerationModel(upstreamModel)) && (usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.ImageOutputTokens > 0) {
+			imageCount = 1
+		}
+		return &ForwardResult{
+			RequestID:                     requestID,
+			UpstreamHeaders:               resp.Header,
+			Usage:                         *usage,
+			Model:                         model,
+			UpstreamModel:                 upstreamModel,
+			UpstreamResponseModel:         observedUpstreamResponseModel(c),
+			UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+			Stream:                        isSSE,
+			Duration:                      time.Since(startTime),
+			FirstTokenMs:                  firstTokenMs,
+			ClientDisconnect:              clientDisconnect,
+			ImageEndpoint:                 imageCount > 0,
+			ImageCount:                    imageCount,
+			ImageOutputSizes:              imageOutputSizes,
+			InteractionTerminal:           interactionTerminal,
+		}, interactionID, observedModel, nil
 	}
 
 	if usage == nil {
@@ -841,6 +890,7 @@ func (s *GeminiMessagesCompatService) FetchGeminiInteractionSnapshot(
 	observer := &upstreamResponseModelObserver{}
 	observeGeminiInteractionModel(observer, respBody, true)
 	imageCount := countGeminiInteractionImages(respBody)
+	imageOutputSizes := extractGeminiInteractionImageOutputSizes(respBody)
 	if imageCount == 0 && isImageGenerationModel(observedModel) && (usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.ImageOutputTokens > 0 || status == "completed") {
 		imageCount = 1
 	}
@@ -855,6 +905,7 @@ func (s *GeminiMessagesCompatService) FetchGeminiInteractionSnapshot(
 		UpstreamResponseModelConflict: observer.Conflict(),
 		ImageEndpoint:                 imageCount > 0,
 		ImageCount:                    imageCount,
+		ImageOutputSizes:              imageOutputSizes,
 		InteractionTerminal:           terminal,
 	}, status, terminal, nil
 }
@@ -1246,6 +1297,48 @@ func extractGeminiInteractionTerminalStatus(payload []byte) (status string, isTe
 	}
 }
 
+func extractGeminiInteractionImageOutputSizes(payload []byte) []string {
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return nil
+	}
+	var sizes []string
+	collect := func(items gjson.Result) {
+		items.ForEach(func(_, item gjson.Result) bool {
+			if isInteractionImageItem(item) {
+				if dims := decodeGeminiImageDimensions(item.Get("data").String()); dims != "" {
+					sizes = append(sizes, dims)
+				}
+			}
+			return true
+		})
+	}
+	for _, root := range []string{"outputs", "interaction.outputs"} {
+		if items := gjson.GetBytes(payload, root); items.IsArray() {
+			collect(items)
+		}
+	}
+	if len(sizes) == 0 {
+		for _, root := range []string{"steps", "interaction.steps"} {
+			if steps := gjson.GetBytes(payload, root); steps.IsArray() {
+				steps.ForEach(func(_, step gjson.Result) bool {
+					if strings.EqualFold(strings.TrimSpace(step.Get("type").String()), "model_output") {
+						if content := step.Get("content"); content.IsArray() {
+							collect(content)
+						}
+					}
+					return true
+				})
+			}
+		}
+	}
+	if len(sizes) == 0 {
+		if _, candSizes := extractGeminiImageOutputs(payload); len(candSizes) > 0 {
+			sizes = candSizes
+		}
+	}
+	return sizes
+}
+
 func isInteractionImageItem(item gjson.Result) bool {
 	if !strings.EqualFold(strings.TrimSpace(item.Get("type").String()), "image") {
 		return false
@@ -1267,12 +1360,39 @@ func extractGeminiInteractionUsage(data []byte) *ClaudeUsage {
 		totalThoughts := int(u.Get("total_thought_tokens").Int())
 		totalToolUse := int(u.Get("total_tool_use_tokens").Int())
 
+		textOutputTokens := 0
 		imageTokens := 0
+		audioOutputTokens := 0
+		videoOutputTokens := 0
 		if modalities := u.Get("output_tokens_by_modality"); modalities.Exists() && modalities.IsArray() {
 			modalities.ForEach(func(_, item gjson.Result) bool {
-				if strings.EqualFold(item.Get("modality").String(), "IMAGE") {
-					imageTokens = int(item.Get("tokens").Int())
-					return false
+				count := int(item.Get("tokens").Int())
+				if count == 0 {
+					count = int(item.Get("token_count").Int())
+				}
+				switch strings.ToUpper(strings.TrimSpace(item.Get("modality").String())) {
+				case "TEXT":
+					textOutputTokens += count
+				case "IMAGE":
+					imageTokens += count
+				case "AUDIO":
+					audioOutputTokens += count
+				case "VIDEO":
+					videoOutputTokens += count
+				}
+				return true
+			})
+		}
+
+		audioInputTokens := 0
+		if modalities := u.Get("input_tokens_by_modality"); modalities.Exists() && modalities.IsArray() {
+			modalities.ForEach(func(_, item gjson.Result) bool {
+				if strings.EqualFold(strings.TrimSpace(item.Get("modality").String()), "AUDIO") {
+					count := int(item.Get("tokens").Int())
+					if count == 0 {
+						count = int(item.Get("token_count").Int())
+					}
+					audioInputTokens += count
 				}
 				return true
 			})
@@ -1280,13 +1400,17 @@ func extractGeminiInteractionUsage(data []byte) *ClaudeUsage {
 
 		// Interactions total_input_tokens reflects full prompt context; subtract cached tokens cleanly.
 		inputTokens := max(totalInput-totalCached, 0) + totalToolUse
-		outputTokens := totalOutput + totalThoughts
-		if inputTokens > 0 || outputTokens > 0 || totalCached > 0 || imageTokens > 0 {
+		modalityOutputSum := textOutputTokens + imageTokens + audioOutputTokens + videoOutputTokens
+		outputTokens := max(totalOutput, modalityOutputSum) + totalThoughts
+		if inputTokens > 0 || outputTokens > 0 || totalCached > 0 || imageTokens > 0 || audioOutputTokens > 0 || videoOutputTokens > 0 {
 			return &ClaudeUsage{
 				InputTokens:          inputTokens,
 				OutputTokens:         outputTokens,
 				CacheReadInputTokens: totalCached,
 				ImageOutputTokens:    imageTokens,
+				AudioInputTokens:     audioInputTokens,
+				AudioOutputTokens:    audioOutputTokens,
+				VideoOutputTokens:    videoOutputTokens,
 			}
 		}
 	}
