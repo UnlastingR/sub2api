@@ -22,8 +22,8 @@ jobs:
           go-version-file: backend/go.mod
           check-latest: false
           cache-dependency-path: backend/go.sum
-        - name: Verify Go version
-          run: |
+      - name: Verify Go version
+        run: |
           expected_version="$(awk '$1 == "go" { print $2; exit }' backend/go.mod)"
           go version | grep -Fq "go${expected_version}"
       - name: Run govulncheck

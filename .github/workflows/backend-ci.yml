@@ -34,8 +34,8 @@ jobs:
           check-latest: false
           cache: true
           cache-dependency-path: backend/go.sum
-        - name: Verify Go version
-          run: |
+      - name: Verify Go version
+        run: |
           expected_version="$(awk '$1 == "go" { print $2; exit }' backend/go.mod)"
           go version | grep -Fq "go${expected_version}"
       - name: Unit tests
@@ -75,8 +75,8 @@ jobs:
           check-latest: false
           cache: true
           cache-dependency-path: backend/go.sum
-        - name: Verify Go version
-          run: |
+      - name: Verify Go version
+        run: |
           expected_version="$(awk '$1 == "go" { print $2; exit }' backend/go.mod)"
           go version | grep -Fq "go${expected_version}"
       - name: golangci-lint
