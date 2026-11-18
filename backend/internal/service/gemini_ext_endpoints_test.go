@@ -432,7 +432,7 @@ func TestAccountStatsBaselineWithBatchCostFactor(t *testing.T) {
 		statsBaselineCost /= costFactor
 	}
 	applyAccountStatsCost(context.Background(), usageLog, cs, nil, 7, 42, "gemini-3.5-flash-lite", "gemini-3.5-flash-lite",
-		UsageTokens{InputTokens: 1_000_000, OutputTokens: 500_000}, statsBaselineCost, time.Now(), true)
+		UsageTokens{InputTokens: 1_000_000, OutputTokens: 500_000}, statsBaselineCost, time.Now(), true, 1)
 	if costFactor > 0 && costFactor != 1 && usageLog.AccountStatsCost != nil {
 		scaled := *usageLog.AccountStatsCost * costFactor
 		usageLog.AccountStatsCost = &scaled

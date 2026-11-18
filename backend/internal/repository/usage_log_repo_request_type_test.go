@@ -1224,7 +1224,7 @@ func TestUsageLogRepositoryGetModelStatsAccountFilterKeepsActualCost(t *testing.
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestUsageLogRepositoryGetEndpointStatsAccountFilterKeepsActualCost(t *testing.T) {
+func TestUsageLogRepositoryGetEndpointStatsAccountFilterUsesAccountStatsCost(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}
 
@@ -1232,15 +1232,15 @@ func TestUsageLogRepositoryGetEndpointStatsAccountFilterKeepsActualCost(t *testi
 	end := start.Add(24 * time.Hour)
 	accountID := int64(42)
 
-	mock.ExpectQuery("COALESCE\\(SUM\\(actual_cost\\), 0\\) as actual_cost,\\s+COALESCE\\(SUM\\(COALESCE\\(account_stats_cost, total_cost\\) \\* COALESCE\\(account_rate_multiplier, 1\\)\\), 0\\) as account_cost").
+	mock.ExpectQuery("COALESCE\\(SUM\\(COALESCE\\(account_stats_cost, total_cost\\) \\* COALESCE\\(account_rate_multiplier, 1\\)\\), 0\\) as actual_cost,\\s+COALESCE\\(SUM\\(COALESCE\\(account_stats_cost, total_cost\\) \\* COALESCE\\(account_rate_multiplier, 1\\)\\), 0\\) as account_cost").
 		WithArgs(start, end, accountID).
 		WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost", "account_cost"}).
-			AddRow("/v1beta/models", int64(3), int64(30), 6.0, 2.4, 0.9))
+			AddRow("/v1beta/models", int64(3), int64(30), 6.0, 0.9, 0.9))
 
 	results, err := repo.GetEndpointStatsWithFilters(context.Background(), start, end, 0, 0, accountID, 0, "", nil, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	require.Equal(t, 2.4, results[0].ActualCost)
+	require.Equal(t, 0.9, results[0].ActualCost)
 	require.Equal(t, 0.9, results[0].AccountCost)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

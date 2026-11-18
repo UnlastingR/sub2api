@@ -59,8 +59,8 @@ func TestAccountEndpointDistributionUsesNormalizedGeminiPaths(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta("CASE WHEN TRIM(inbound_endpoint) LIKE '/v1beta/models/%' THEN '/v1beta/models'")).
 		WithArgs(start, end, int64(42)).
-		WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost"}).
-			AddRow("/v1beta/models", int64(2), int64(10), 0.002, 0.002))
+		WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost", "account_cost"}).
+			AddRow("/v1beta/models", int64(2), int64(10), 0.002, 0.002, 0.002))
 
 	stats, err := repo.GetEndpointStatsWithFilters(context.Background(), start, end, 42, 0, 0, 0, "", nil, nil, nil)
 	require.NoError(t, err)
