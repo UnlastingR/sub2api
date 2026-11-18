@@ -670,7 +670,7 @@ type ClaudeUsage struct {
 	cacheCreationInputTokensFromDetails bool
 	promptTotalTokens                   int
 	promptTotalPresent                  bool
-	VideoOutputTokens        int `json:"video_output_tokens,omitempty"`
+	VideoOutputTokens                   int `json:"video_output_tokens,omitempty"`
 }
 
 // ForwardResult 转发结果
