@@ -172,7 +172,7 @@ func TestUsageLog_GeminiBatchSharesModelEndpointDistribution(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(2), stats.TotalRequests)
 	require.Equal(t, []usagestats.EndpointStat{{
-		Endpoint: modelsEndpoint, Requests: 2, TotalTokens: 10, Cost: 0.002, ActualCost: 0.002,
+		Endpoint: modelsEndpoint, Requests: 2, TotalTokens: 10, Cost: 0.002, ActualCost: 0.002, AccountCost: 0.002,
 	}}, stats.Endpoints)
 	require.Equal(t, stats.Endpoints, stats.UpstreamEndpoints)
 	require.Len(t, stats.EndpointPaths, 1)
