@@ -152,7 +152,7 @@ func (h *GatewayHandler) executeGeminiExtRequest(c *gin.Context, opts geminiExtR
 		if err != nil {
 			var maxErr *http.MaxBytesError
 			if errors.As(err, &maxErr) {
-				googleError(c, http.StatusRequestEntityTooLarge, buildBodyTooLargeMessage(maxErr.Limit))
+				googleError(c, http.StatusRequestEntityTooLarge, pkghttputil.BodyTooLargeMessage(maxErr.Limit))
 				return
 			}
 			googleError(c, http.StatusBadRequest, "Failed to read request body")
@@ -1194,7 +1194,7 @@ func (h *GatewayHandler) handleGeminiBatchCreate(c *gin.Context, modelName, acti
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			googleError(c, http.StatusRequestEntityTooLarge, buildBodyTooLargeMessage(maxErr.Limit))
+			googleError(c, http.StatusRequestEntityTooLarge, pkghttputil.BodyTooLargeMessage(maxErr.Limit))
 			return
 		}
 		googleError(c, http.StatusBadRequest, "Failed to read request body")
