@@ -521,9 +521,9 @@ func RegisterGatewayRoutes(
 		c.Next()
 	}
 	r.GET("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
-		clientRequestID, opsErrorLogger, endpointNorm, geminiLiveAuthMiddleware, groupModelAllowlist, compositeGeminiTarget, requireGroupGoogle, h.Gateway.GeminiLiveWS)
+		clientRequestID, opsErrorLogger, endpointNorm, geminiLiveAuthMiddleware, groupModelAllowlist, rejectConflictingFields, compositeGeminiTarget, requireGroupGoogle, h.Gateway.GeminiLiveWS)
 	r.GET("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained",
-		clientRequestID, opsErrorLogger, endpointNorm, geminiLiveConstrainedBridge, geminiLiveAuthMiddleware, groupModelAllowlist, compositeGeminiTarget, requireGroupGoogle, h.Gateway.GeminiLiveWSConstrained)
+		clientRequestID, opsErrorLogger, endpointNorm, geminiLiveConstrainedBridge, geminiLiveAuthMiddleware, groupModelAllowlist, rejectConflictingFields, compositeGeminiTarget, requireGroupGoogle, h.Gateway.GeminiLiveWSConstrained)
 
 	// OpenAI Responses API（不带v1前缀的别名）— auto-route based on group platform
 	responsesHandler := func(c *gin.Context) {
