@@ -253,6 +253,6 @@ func (s *OpenAIGatewayService) buildCodexHistoryNotesRequest(
 	fpIDs := resolveCodexFingerprintIDs(account, clientSessionID, account.GetCodexFingerprintMode())
 	applyCodexFingerprintHeaders(req.Header, fpIDs)
 	enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
-	account.ApplyHeaderOverrides(req.Header)
+	account.ApplyHeaderOverrides(req.Context(), req.Header)
 	return req, nil
 }
