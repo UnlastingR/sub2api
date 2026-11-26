@@ -236,6 +236,7 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.openaiFastPolicy.summaryOtherModels": "其他模型",
     "admin.settings.openaiFastPolicy.summaryAction.filter": "过滤",
     "admin.settings.openaiFastPolicy.summaryAction.pass": "透传",
+    "admin.settings.openaiFastPolicy.summaryAction.force_flex": "强制 flex",
     "admin.settings.security.passkeyDeploymentHint":
       "请由服务器运维在部署配置中将 webauthn.enabled 设为 true，填写 webauthn.rp_id（仅域名）与 webauthn.rp_origins（完整 HTTPS 来源），然后重启服务。",
     "admin.settings.site.uploadImage": "上传图片",
