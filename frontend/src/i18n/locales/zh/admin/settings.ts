@@ -1198,6 +1198,7 @@ export default {
         saveHint: '保存时随系统设置一起提交（点击页面底部「保存」按钮）。',
         serviceTier: 'service_tier 匹配',
         tierAll: '全部 tier 值',
+        tierAllIncludingMissing: '全部 tier（含未指定）',
         tierMissing: '省略 tier',
         tierPriority: 'priority（fast）',
         tierUltrafast: 'ultrafast',
@@ -1206,12 +1207,16 @@ export default {
         actionPass: '透传（保留 service_tier）',
         actionFilter: '过滤（移除 service_tier）',
         actionForcePriority: '强制设置 priority（fast）',
+        actionForceFlex: '强制设置 flex',
         actionBlock: '拦截（拒绝请求）',
         scope: '生效范围',
         scopeAll: '全部账号',
         scopeOAuth: '仅 OAuth 账号',
         scopeAPIKey: '仅 API Key 账号',
         scopeBedrock: '仅 Bedrock 账号',
+        planTypes: '上游订阅类型',
+        planTypesAll: '全部订阅类型（不限）',
+        planTypesHint: '留空不限。按已调度 OpenAI 账号的 plan_type 匹配，可多选；订阅类型规则优先于未指定订阅类型的用户规则。Business 对应 team 和 self_serve_business_usage_based，Business Premium 对应 self_serve_business_prolite。未指定 tier 时仅强制操作生效。',
         userIds: '指定用户',
         userIdsHint: '输入任意邮箱关键词进行模糊搜索。留空表示对全部 Sub2API 用户生效；选中用户的 API Key 请求优先匹配用户规则。',
         userSearchPlaceholder: '输入用户邮箱搜索',
@@ -1236,7 +1241,8 @@ export default {
           pass: '透传',
           filter: '过滤',
           block: '拦截',
-          force_priority: '强制 priority'
+          force_priority: '强制 priority',
+          force_flex: '强制 flex'
         }
       },
       wechatConnect: {

@@ -2802,6 +2802,43 @@ func TestOpenAIGatewayService_OAuthPassthrough_GroupForceOpenAIUltrafastOverride
 	require.Equal(t, OpenAIFastTierUltrafast, *result.ServiceTier)
 }
 
+func TestOpenAIGatewayService_OAuthPlanTierForward(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	settings := &OpenAIFastPolicySettings{Rules: []OpenAIFastPolicyRule{
+		{ServiceTier: OpenAIFastTierAnyIncludingMissing, Action: OpenAIFastPolicyActionForceFlex, Scope: BetaPolicyScopeOAuth, PlanTypes: []string{"plus"}},
+		{ServiceTier: OpenAIFastTierAnyIncludingMissing, Action: OpenAIFastPolicyActionForcePriority, Scope: BetaPolicyScopeOAuth, PlanTypes: []string{"team"}},
+	}}
+	for _, passthrough := range []bool{true, false} {
+		for _, tc := range []struct{ plan, want string }{{"plus", "flex"}, {"team", "priority"}} {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+			c.Request.Header.Set("User-Agent", "codex_cli_rs/0.144.1")
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+			}}
+			svc := newOpenAIGatewayServiceWithSettings(t, settings)
+			svc.cfg = &config.Config{}
+			svc.httpUpstream = upstream
+			account := &Account{
+				ID: 123, Name: "oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc", "plan_type": tc.plan},
+				Extra:       map[string]any{"openai_passthrough": passthrough, "openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeOff},
+				Status:      StatusActive, Schedulable: true, RateMultiplier: f64p(1),
+			}
+			ctx := context.WithValue(context.Background(), ctxkey.Group, &Group{ID: 7, Platform: PlatformOpenAI, Status: StatusActive, Hydrated: true, ForceOpenAIFast: true})
+			body := []byte(`{"model":"gpt-5.6-sol","stream":true,"instructions":"test","input":"hi","service_tier":"flex"}`)
+			result, err := svc.Forward(ctx, c, account, body)
+			require.NoError(t, err, "plan=%s passthrough=%t", tc.plan, passthrough)
+			require.Equal(t, tc.want, gjson.GetBytes(upstream.lastBody, "service_tier").String())
+			require.NotNil(t, result.ServiceTier)
+			require.Equal(t, tc.want, *result.ServiceTier)
+		}
+	}
+}
+
 func TestOpenAIGatewayService_OAuthLegacy_GroupForceOpenAIUltrafast(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	account := &Account{

@@ -2122,12 +2122,14 @@ func (e *OpenAIFastBlockedError) Error() string { return e.Message }
 //
 // Matching rules:
 //   - Scope filters by account type (all / oauth / apikey / bedrock)
+//   - PlanTypes, when present, matches the selected OpenAI OAuth account's subscription SKU
 //   - UserIDs, when present, filters by the trusted Sub2API user that owns the API key
-//   - ServiceTier must be empty (= any), "all", "missing", or equal the normalized tier
+//   - ServiceTier must be empty (= any), "all", "all_including_missing", "missing", or equal the normalized tier
 //   - ModelWhitelist narrows the rule to specific models; FallbackAction
 //     handles the non-matching case (default: pass)
-//   - User-specific rules take precedence over global rules; each group keeps
-//     the configured first-match order
+//   - Plan-specific rules take precedence over rules without a plan restriction;
+//     within each class, user-specific rules precede global rules, preserving
+//     configured first-match order
 //
 // 与 Claude BetaPolicy 的差异（保留首条匹配 short-circuit）：
 //   - BetaPolicy 处理的是 anthropic-beta header 中的 token 集合，不同
@@ -2156,16 +2158,54 @@ func (s *OpenAIGatewayService) evaluateOpenAIFastPolicy(ctx context.Context, acc
 	return evaluateOpenAIFastPolicyWithSettings(settings, openAIFastPolicyUserID(ctx), account, model, tier)
 }
 
-// shouldForceOpenAIFastPriorityForMissingTier reports whether a request that
-// omitted service_tier should be upgraded to priority. This is opt-in through
-// the dedicated "missing" tier matcher; legacy "all" rules continue to apply
-// only to requests that explicitly selected a recognized tier.
-func (s *OpenAIGatewayService) shouldForceOpenAIFastPriorityForMissingTier(ctx context.Context, account *Account, model string) bool {
+func openAIFastPolicyForcedTier(action string) string {
+	switch action {
+	case OpenAIFastPolicyActionForcePriority:
+		return OpenAIFastTierPriority
+	case OpenAIFastPolicyActionForceFlex:
+		return OpenAIFastTierFlex
+	default:
+		return ""
+	}
+}
+
+// Omitted tiers can be forced by "missing" or "all_including_missing" rules.
+// Legacy "all" continues to match explicit tiers only.
+func (s *OpenAIGatewayService) forcedOpenAIFastTierForMissingTier(ctx context.Context, account *Account, model string) string {
 	if account == nil || account.Platform != PlatformOpenAI {
-		return false
+		return ""
 	}
 	action, _ := s.evaluateOpenAIFastPolicy(ctx, account, model, OpenAIFastTierMissing)
-	return action == OpenAIFastPolicyActionForcePriority
+	return openAIFastPolicyForcedTier(action)
+}
+
+var openAIFastPolicyPlanTypeReplacer = strings.NewReplacer("_", "", "-", "", " ", "")
+
+func normalizeOpenAIFastPolicyPlanType(plan string) string {
+	key := openAIFastPolicyPlanTypeReplacer.Replace(strings.ToLower(strings.TrimSpace(plan)))
+	if key == "chatgptpro" {
+		return "pro"
+	}
+	return key
+}
+
+func openAIFastPolicyPlanMatches(plans []string, account *Account) bool {
+	if len(plans) == 0 {
+		return true
+	}
+	if account == nil || !account.IsOpenAIOAuthLike() {
+		return false
+	}
+	actual := normalizeOpenAIFastPolicyPlanType(account.GetCredential("plan_type"))
+	if actual == "" {
+		return false
+	}
+	for _, plan := range plans {
+		if normalizeOpenAIFastPolicyPlanType(plan) == actual {
+			return true
+		}
+	}
+	return false
 }
 
 // evaluateOpenAIFastPolicyWithSettings is the pure-function core extracted so
@@ -2179,11 +2219,14 @@ func evaluateOpenAIFastPolicyWithSettings(settings *OpenAIFastPolicySettings, us
 	isOAuth := account != nil && account.IsOAuth()
 	isBedrock := account != nil && account.IsBedrock()
 
-	// 用户专属规则先于全局规则。规则组内仍按配置顺序首条命中，允许
-	// 管理员为某位用户配置例外，而不被先出现的全局规则覆盖。
-	for _, userScoped := range []bool{true, false} {
+	// Plan-specific rules outrank generic user rules. Within either class,
+	// user-specific rules retain precedence and configured order is preserved.
+	for _, specificity := range []struct{ plan, user bool }{{true, true}, {true, false}, {false, true}, {false, false}} {
 		for _, rule := range settings.Rules {
-			if (len(rule.UserIDs) > 0) != userScoped || !openAIFastPolicyUserMatches(rule.UserIDs, userID) {
+			if (len(rule.PlanTypes) > 0) != specificity.plan ||
+				(len(rule.UserIDs) > 0) != specificity.user ||
+				!openAIFastPolicyPlanMatches(rule.PlanTypes, account) ||
+				!openAIFastPolicyUserMatches(rule.UserIDs, userID) {
 				continue
 			}
 			if !betaPolicyScopeMatches(rule.Scope, isOAuth, isBedrock) {
@@ -2191,10 +2234,10 @@ func evaluateOpenAIFastPolicyWithSettings(settings *OpenAIFastPolicySettings, us
 			}
 			ruleTier := strings.ToLower(strings.TrimSpace(rule.ServiceTier))
 			if tier == OpenAIFastTierMissing {
-				if ruleTier != OpenAIFastTierMissing {
+				if ruleTier != OpenAIFastTierMissing && ruleTier != OpenAIFastTierAnyIncludingMissing {
 					continue
 				}
-			} else if ruleTier != "" && ruleTier != OpenAIFastTierAny && ruleTier != tier {
+			} else if ruleTier != "" && ruleTier != OpenAIFastTierAny && ruleTier != OpenAIFastTierAnyIncludingMissing && ruleTier != tier {
 				continue
 			}
 			eff := BetaPolicyRule{
@@ -2315,7 +2358,7 @@ func openAIGroupForcedServiceTier(ctx context.Context, account *Account, model s
 // body. When action=filter it removes the service_tier field; when
 // action=block it returns (body, *OpenAIFastBlockedError). On pass it
 // normalizes the service_tier value (e.g. client alias "fast" → "priority").
-// action=force_priority rewrites any matched known tier to "priority". Before
+// action=force_priority / force_flex rewrites any matched tier to "priority" / "flex". Before
 // the global policy is evaluated, a trusted request Group with
 // ForceOpenAIFast enabled unconditionally sets service_tier to "priority";
 // ForceOpenAIUltrafast sets it to "ultrafast" for models that support it and
@@ -2341,10 +2384,10 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToBody(ctx context.Context, 
 	}
 	rawTier := gjson.GetBytes(body, "service_tier").String()
 	if rawTier == "" {
-		if s.shouldForceOpenAIFastPriorityForMissingTier(ctx, account, model) {
-			updated, err := sjson.SetBytes(body, "service_tier", OpenAIFastTierPriority)
+		if forcedTier := s.forcedOpenAIFastTierForMissingTier(ctx, account, model); forcedTier != "" {
+			updated, err := sjson.SetBytes(body, "service_tier", forcedTier)
 			if err != nil {
-				return body, fmt.Errorf("force missing service_tier priority on body: %w", err)
+				return body, fmt.Errorf("force missing service_tier %s on body: %w", forcedTier, err)
 			}
 			return updated, nil
 		}
@@ -2368,10 +2411,10 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToBody(ctx context.Context, 
 			return body, fmt.Errorf("strip service_tier from body: %w", err)
 		}
 		return trimmed, nil
-	case OpenAIFastPolicyActionForcePriority:
-		updated, err := sjson.SetBytes(body, "service_tier", OpenAIFastTierPriority)
+	case OpenAIFastPolicyActionForcePriority, OpenAIFastPolicyActionForceFlex:
+		updated, err := sjson.SetBytes(body, "service_tier", openAIFastPolicyForcedTier(action))
 		if err != nil {
-			return body, fmt.Errorf("force service_tier priority on body: %w", err)
+			return body, fmt.Errorf("force service_tier on body: %w", err)
 		}
 		return updated, nil
 	default:
@@ -2418,6 +2461,7 @@ func writeOpenAIFastPolicyBlockedResponse(c *gin.Context, err *OpenAIFastBlocked
 //   - pass: keeps service_tier, normalizing aliases such as "fast" to "priority"
 //   - filter: returns a copy with top-level service_tier removed
 //   - force_priority: keeps service_tier and rewrites it to "priority"
+//   - force_flex: keeps service_tier and rewrites it to "flex"
 //   - block: returns (frame, *OpenAIFastBlockedError)
 //   - Group ForceOpenAIFast / ForceOpenAIUltrafast: sets priority / ultrafast
 //     (ultrafast only for models that support it) first, then applies the
@@ -2469,10 +2513,10 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToWSResponseCreate(
 	}
 	rawTier := gjson.GetBytes(frame, "service_tier").String()
 	if rawTier == "" {
-		if s.shouldForceOpenAIFastPriorityForMissingTier(ctx, account, model) {
-			updated, err := sjson.SetBytes(frame, "service_tier", OpenAIFastTierPriority)
+		if forcedTier := s.forcedOpenAIFastTierForMissingTier(ctx, account, model); forcedTier != "" {
+			updated, err := sjson.SetBytes(frame, "service_tier", forcedTier)
 			if err != nil {
-				return frame, nil, fmt.Errorf("force missing service_tier priority in ws frame: %w", err)
+				return frame, nil, fmt.Errorf("force missing service_tier %s in ws frame: %w", forcedTier, err)
 			}
 			return updated, nil, nil
 		}
@@ -2496,10 +2540,10 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToWSResponseCreate(
 			return frame, nil, fmt.Errorf("strip service_tier from ws frame: %w", err)
 		}
 		return trimmed, nil, nil
-	case OpenAIFastPolicyActionForcePriority:
-		updated, err := sjson.SetBytes(frame, "service_tier", OpenAIFastTierPriority)
+	case OpenAIFastPolicyActionForcePriority, OpenAIFastPolicyActionForceFlex:
+		updated, err := sjson.SetBytes(frame, "service_tier", openAIFastPolicyForcedTier(action))
 		if err != nil {
-			return frame, nil, fmt.Errorf("force service_tier priority in ws frame: %w", err)
+			return frame, nil, fmt.Errorf("force service_tier in ws frame: %w", err)
 		}
 		return updated, nil, nil
 	default:

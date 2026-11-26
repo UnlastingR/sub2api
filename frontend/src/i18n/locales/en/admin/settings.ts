@@ -1204,6 +1204,7 @@ export default {
         saveHint: 'Saved together with system settings (click the global Save button at the bottom of the page).',
         serviceTier: 'service_tier match',
         tierAll: 'All tier values',
+        tierAllIncludingMissing: 'All tiers (including omitted)',
         tierMissing: 'Omitted tier',
         tierPriority: 'priority (fast)',
         tierUltrafast: 'ultrafast',
@@ -1212,12 +1213,16 @@ export default {
         actionPass: 'Pass (keep service_tier)',
         actionFilter: 'Filter (remove service_tier)',
         actionForcePriority: 'Force priority (fast)',
+        actionForceFlex: 'Force flex',
         actionBlock: 'Block (reject request)',
         scope: 'Scope',
         scopeAll: 'All accounts',
         scopeOAuth: 'OAuth only',
         scopeAPIKey: 'API Key only',
         scopeBedrock: 'Bedrock only',
+        planTypes: 'Upstream subscription types',
+        planTypesAll: 'All subscription types (unrestricted)',
+        planTypesHint: 'Leave empty for no restriction. Matches plan_type of the selected OpenAI account; multiple selections are allowed. Plan-specific rules precede user rules without a plan restriction. Business uses team or self_serve_business_usage_based; Business Premium uses self_serve_business_prolite. Only force actions change omitted tiers.',
         userIds: 'Specific users',
         userIdsHint: 'Type any part of a user email to search. Leave empty to apply to all Sub2API users. Selected users match requests from their API keys and take precedence over global rules.',
         userSearchPlaceholder: 'Search by user email',
@@ -1242,7 +1247,8 @@ export default {
           pass: 'Pass',
           filter: 'Filter',
           block: 'Block',
-          force_priority: 'Force priority'
+          force_priority: 'Force priority',
+          force_flex: 'Force flex'
         }
       },
       wechatConnect: {

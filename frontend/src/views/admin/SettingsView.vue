@@ -1142,7 +1142,9 @@
                       @update:modelValue="
                         rule.service_tier = $event as
                           | 'all'
+                          | 'all_including_missing'
                           | 'priority'
+                          | 'ultrafast'
                           | 'flex'
                           | 'missing'
                       "
@@ -1165,6 +1167,7 @@
                           | 'filter'
                           | 'block'
                           | 'force_priority'
+                          | 'force_flex'
                       "
                       :options="openaiFastPolicyActionOptions"
                     />
@@ -1189,6 +1192,27 @@
                       :options="openaiFastPolicyScopeOptions"
                     />
                   </div>
+                </div>
+
+                <!-- Upstream plan types -->
+                <div class="mt-3">
+                  <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                    {{ t("admin.settings.openaiFastPolicy.planTypes") }}
+                  </label>
+                  <p class="mb-2 text-xs text-gray-400 dark:text-gray-500">
+                    {{ t("admin.settings.openaiFastPolicy.planTypesHint") }}
+                  </p>
+                  <details :data-testid="`openai-fast-policy-plans-${ruleIndex}`" class="rounded-lg border border-gray-200 p-2 dark:border-dark-600">
+                    <summary class="cursor-pointer text-sm text-gray-700 dark:text-gray-300">
+                      {{ rule.plan_types?.length ? rule.plan_types.map((plan) => openAIPlanTypeLabel(plan) || plan).join(", ") : t("admin.settings.openaiFastPolicy.planTypesAll") }}
+                    </summary>
+                    <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <label v-for="plan in openaiFastPolicyPlanOptions(rule.plan_types)" :key="plan" class="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
+                        <input v-model="rule.plan_types" type="checkbox" :value="plan" />
+                        <span>{{ openAIPlanTypeLabel(plan) || plan }} <span class="text-gray-400">({{ plan }})</span></span>
+                      </label>
+                    </div>
+                  </details>
                 </div>
 
                 <!-- User Scope -->
@@ -1327,6 +1351,7 @@
                         | 'filter'
                         | 'block'
                         | 'force_priority'
+                        | 'force_flex'
                     "
                     :options="openaiFastPolicyActionOptions"
                   />
@@ -9053,6 +9078,7 @@ import AdminAccessKeysSettings from "@/components/admin/settings/AdminAccessKeys
 import TotpStepUpDialog from "@/components/auth/TotpStepUpDialog.vue";
 import { affiliatesAPI, type AffiliateAdminEntry, type SimpleUser as AffiliateSimpleUser } from "@/api/admin/affiliates";
 import { extractApiErrorMessage, extractI18nErrorMessage } from "@/utils/apiError";
+import { openAIPlanTypes, openAIPlanTypeLabel, openAIPlanTypeKey } from "@/utils/planType";
 import { formatBalanceRechargeMultiplier } from "@/utils/rechargeBonus";
 import { useAppStore } from "@/stores";
 import { useAdminSettingsStore } from "@/stores/adminSettings";
@@ -11216,6 +11242,7 @@ async function loadSettings() {
       openaiFastPolicyForm.rules =
         settings.openai_fast_policy_settings.rules.map((rule) => ({
           ...rule,
+          plan_types: rule.plan_types ? [...rule.plan_types] : [],
           user_ids: rule.user_ids ? [...rule.user_ids] : [],
           model_whitelist: rule.model_whitelist
             ? [...rule.model_whitelist]
@@ -11826,6 +11853,7 @@ async function saveSettings() {
             service_tier: rule.service_tier,
             action: rule.action,
             scope: rule.scope,
+            plan_types: rule.plan_types?.length ? [...rule.plan_types] : undefined,
             user_ids:
               rule.user_ids && rule.user_ids.length > 0
                 ? [...rule.user_ids]
@@ -11922,6 +11950,7 @@ async function saveSettings() {
       openaiFastPolicyForm.rules =
         updated.openai_fast_policy_settings.rules.map((rule) => ({
           ...rule,
+          plan_types: rule.plan_types ? [...rule.plan_types] : [],
           user_ids: rule.user_ids ? [...rule.user_ids] : [],
           model_whitelist: rule.model_whitelist
             ? [...rule.model_whitelist]
@@ -12461,6 +12490,7 @@ async function loadBetaPolicySettings() {
 
 const openaiFastPolicyTierOptions = computed(() => [
   { value: "all", label: t("admin.settings.openaiFastPolicy.tierAll") },
+  { value: "all_including_missing", label: t("admin.settings.openaiFastPolicy.tierAllIncludingMissing") },
   {
     value: "priority",
     label: t("admin.settings.openaiFastPolicy.tierPriority"),
@@ -12480,6 +12510,7 @@ const openaiFastPolicyActionOptions = computed(() => [
     value: "force_priority",
     label: t("admin.settings.openaiFastPolicy.actionForcePriority"),
   },
+  { value: "force_flex", label: t("admin.settings.openaiFastPolicy.actionForceFlex") },
   { value: "block", label: t("admin.settings.openaiFastPolicy.actionBlock") },
 ]);
 
@@ -12491,6 +12522,15 @@ function openaiFastPolicyActionSummary(
 
 function hasOpenAIFastPolicyTargetModels(rule: OpenAIFastPolicyRule) {
   return Boolean(rule.model_whitelist?.some((pattern) => pattern.trim() !== ""));
+}
+
+function openaiFastPolicyPlanOptions(selected: string[] = []): string[] {
+  const byKey = new Map(selected.map((plan) => [openAIPlanTypeKey(plan), plan]));
+  const knownKeys = new Set(openAIPlanTypes.map(openAIPlanTypeKey));
+  return [
+    ...openAIPlanTypes.map((plan) => byKey.get(openAIPlanTypeKey(plan)) || plan),
+    ...selected.filter((plan) => !knownKeys.has(openAIPlanTypeKey(plan))),
+  ];
 }
 
 const openaiFastPolicyScopeOptions = computed(() => [
@@ -12508,6 +12548,7 @@ function addOpenAIFastPolicyRule() {
     service_tier: "priority",
     action: "filter",
     scope: "all",
+    plan_types: [],
     user_ids: [],
     error_message: "",
     model_whitelist: [],

@@ -1495,13 +1495,14 @@ export async function updateRectifierSettings(
  * Matches backend dto.OpenAIFastPolicyRule.
  */
 export interface OpenAIFastPolicyRule {
-  service_tier: "all" | "priority" | "flex" | "ultrafast" | "missing";
-  action: "pass" | "filter" | "block" | "force_priority";
+  service_tier: "all" | "all_including_missing" | "priority" | "flex" | "ultrafast" | "missing";
+  action: "pass" | "filter" | "block" | "force_priority" | "force_flex";
   scope: "all" | "oauth" | "apikey" | "bedrock";
+  plan_types?: string[];
   user_ids?: number[];
   error_message?: string;
   model_whitelist?: string[];
-  fallback_action?: "pass" | "filter" | "block" | "force_priority";
+  fallback_action?: "pass" | "filter" | "block" | "force_priority" | "force_flex";
   fallback_error_message?: string;
 }
 

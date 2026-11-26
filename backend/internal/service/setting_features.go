@@ -1023,13 +1023,15 @@ func (s *SettingService) SetOpenAIFastPolicySettings(ctx context.Context, settin
 	validActions := map[string]bool{
 		BetaPolicyActionPass: true, BetaPolicyActionFilter: true, BetaPolicyActionBlock: true,
 		OpenAIFastPolicyActionForcePriority: true,
+		OpenAIFastPolicyActionForceFlex:     true,
 	}
 	validScopes := map[string]bool{
 		BetaPolicyScopeAll: true, BetaPolicyScopeOAuth: true, BetaPolicyScopeAPIKey: true, BetaPolicyScopeBedrock: true,
 	}
 	validTiers := map[string]bool{
 		OpenAIFastTierAny: true, OpenAIFastTierPriority: true, OpenAIFastTierUltrafast: true, OpenAIFastTierFlex: true,
-		OpenAIFastTierMissing: true,
+		OpenAIFastTierMissing:             true,
+		OpenAIFastTierAnyIncludingMissing: true,
 	}
 
 	for i, rule := range settings.Rules {
@@ -1046,6 +1048,18 @@ func (s *SettingService) SetOpenAIFastPolicySettings(ctx context.Context, settin
 		}
 		if !validScopes[rule.Scope] {
 			return fmt.Errorf("rule[%d]: invalid scope %q", i, rule.Scope)
+		}
+		seenPlans := make(map[string]struct{}, len(rule.PlanTypes))
+		for j, plan := range rule.PlanTypes {
+			key := normalizeOpenAIFastPolicyPlanType(plan)
+			if key == "" {
+				return fmt.Errorf("rule[%d]: plan_types[%d] cannot be empty", i, j)
+			}
+			if _, exists := seenPlans[key]; exists {
+				return fmt.Errorf("rule[%d]: plan_types[%d] duplicates plan type %q", i, j, plan)
+			}
+			seenPlans[key] = struct{}{}
+			settings.Rules[i].PlanTypes[j] = strings.ToLower(strings.TrimSpace(plan))
 		}
 		seenUserIDs := make(map[int64]struct{}, len(rule.UserIDs))
 		for j, userID := range rule.UserIDs {

@@ -698,9 +698,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				return nil, blocked
 			case BetaPolicyActionFilter:
 				markPatchDelete("service_tier")
-			case OpenAIFastPolicyActionForcePriority:
-				if rawTier != OpenAIFastTierPriority {
-					markPatchSet("service_tier", OpenAIFastTierPriority)
+			case OpenAIFastPolicyActionForcePriority, OpenAIFastPolicyActionForceFlex:
+				if forcedTier := openAIFastPolicyForcedTier(action); rawTier != forcedTier {
+					markPatchSet("service_tier", forcedTier)
 				}
 			default:
 				if normTier != rawTier {
@@ -708,8 +708,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				}
 			}
 		}
-	} else if s.shouldForceOpenAIFastPriorityForMissingTier(ctx, account, upstreamModel) {
-		markPatchSet("service_tier", OpenAIFastTierPriority)
+	} else if forcedTier := s.forcedOpenAIFastTierForMissingTier(ctx, account, upstreamModel); forcedTier != "" {
+		markPatchSet("service_tier", forcedTier)
 	}
 
 	if account.UsesOpenAICodexProtocol() {

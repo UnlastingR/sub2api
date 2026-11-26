@@ -1462,6 +1462,40 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(summary.text()).not.toContain("透传");
   });
 
+  it("loads and saves a subscription-scoped force-flex rule", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_fast_policy_settings: {
+        rules: [{
+          service_tier: "all_including_missing",
+          action: "force_flex",
+          scope: "oauth",
+          plan_types: ["plus"],
+        }],
+      },
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+    const plans = wrapper.get('[data-testid="openai-fast-policy-plans-0"]');
+    const plus = plans.get('input[type="checkbox"][value="plus"]');
+    expect((plus.element as HTMLInputElement).checked).toBe(true);
+    expect(wrapper.get('[data-testid="openai-fast-policy-summary-0"]').text()).toContain("强制 flex");
+    await plans.get('input[type="checkbox"][value="team"]').setValue(true);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      openai_fast_policy_settings: {
+        rules: [expect.objectContaining({
+          service_tier: "all_including_missing",
+          action: "force_flex",
+          scope: "oauth",
+          plan_types: ["plus", "team"],
+        })],
+      },
+    }));
+  });
+
   it("loads and saves upstream billing probe settings from the gateway tab", async () => {
     getUpstreamBillingProbeSettings.mockResolvedValueOnce({
       enabled: false,

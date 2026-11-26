@@ -695,22 +695,25 @@ func DefaultBetaPolicySettings() *BetaPolicySettings {
 // 本策略复用 BetaPolicyAction*/BetaPolicyScope* 常量语义，只是匹配键从
 // anthropic-beta header 换成 body 的 service_tier 字段。
 const (
-	OpenAIFastTierAny       = "all"       // 匹配任意已识别的 service_tier
-	OpenAIFastTierPriority  = "priority"  // 仅匹配 fast（priority）
-	OpenAIFastTierUltrafast = "ultrafast" // 仅匹配 ultrafast
-	OpenAIFastTierFlex      = "flex"      // 仅匹配 flex
-	OpenAIFastTierMissing   = "missing"   // 仅匹配省略 service_tier 的请求
+	OpenAIFastTierAny                 = "all" // 匹配任意已识别的 service_tier
+	OpenAIFastTierAnyIncludingMissing = "all_including_missing"
+	OpenAIFastTierPriority            = "priority"  // 仅匹配 fast（priority）
+	OpenAIFastTierUltrafast           = "ultrafast" // 仅匹配 ultrafast
+	OpenAIFastTierFlex                = "flex"      // 仅匹配 flex
+	OpenAIFastTierMissing             = "missing"   // 仅匹配省略 service_tier 的请求
 
 	// OpenAIFastPolicyActionForcePriority 会保留 service_tier 字段并强制写成
 	// priority，用于把 flex/auto/default/scale 等已识别 tier 收敛为 fast。
 	OpenAIFastPolicyActionForcePriority = "force_priority"
+	OpenAIFastPolicyActionForceFlex     = "force_flex"
 )
 
 // OpenAIFastPolicyRule 单条 OpenAI fast/flex 策略规则
 type OpenAIFastPolicyRule struct {
-	ServiceTier          string   `json:"service_tier"`                     // "priority" | "ultrafast" | "flex" | "missing" | "all"
-	Action               string   `json:"action"`                           // "pass" | "filter" | "block" | "force_priority"
+	ServiceTier          string   `json:"service_tier"`                     // "priority" | "ultrafast" | "flex" | "missing" | "all" | "all_including_missing"
+	Action               string   `json:"action"`                           // "pass" | "filter" | "block" | "force_priority" | "force_flex"
 	Scope                string   `json:"scope"`                            // "all" | "oauth" | "apikey" | "bedrock"
+	PlanTypes            []string `json:"plan_types,omitempty"`             // 上游 ChatGPT 订阅 SKU；空=所有订阅档位
 	UserIDs              []int64  `json:"user_ids,omitempty"`               // 空=所有 Sub2API 用户；非空=仅指定 API Key 所属用户
 	ErrorMessage         string   `json:"error_message,omitempty"`          // 自定义错误消息 (action=block 时生效)
 	ModelWhitelist       []string `json:"model_whitelist,omitempty"`        // 模型匹配模式列表（为空=对所有模型生效）
