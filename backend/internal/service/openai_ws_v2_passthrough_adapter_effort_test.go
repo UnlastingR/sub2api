@@ -44,3 +44,24 @@ func TestWSPassthroughUsageMeta_UpdateFromResponseCreate_MappedModelCandidate(t 
 	require.NotNil(t, got)
 	require.Equal(t, "max", *got, "mapped model should preserve max on multi-turn update")
 }
+
+func TestWSPassthroughUsageMeta_UsesLatestConfigurationUpdateEffort(t *testing.T) {
+	body := []byte(`{"type":"response.create","model":"gpt-6.2-sol","reasoning":{"effort":"medium"},"input":[{"role":"user","content":"inspect this"},{"type":"configuration_update","reasoning":{"effort":"xhigh"}}]}`)
+
+	meta := newOpenAIWSPassthroughUsageMeta("gpt-6.2-sol", body)
+	meta.initFromFirstFrame(body, "gpt-6.2-sol")
+	meta.captureRequestedReasoningEffort(body, "gpt-6.2-sol")
+
+	forwarded := meta.reasoningEffort.Load()
+	require.NotNil(t, forwarded)
+	require.Equal(t, "xhigh", *forwarded, "the current turn effort must override the top-level session default")
+	requested := meta.requestedReasoningEffort.Load()
+	require.NotNil(t, requested)
+	require.Equal(t, "xhigh", *requested)
+
+	nextTurn := []byte(`{"type":"response.create","model":"gpt-6.2-sol","reasoning":{"effort":"medium"},"input":[{"type":"configuration_update","reasoning":{"effort":"high"}}]}`)
+	meta.updateFromResponseCreate(nextTurn, "gpt-6.2-sol", "gpt-6.2-sol")
+	forwarded = meta.reasoningEffort.Load()
+	require.NotNil(t, forwarded)
+	require.Equal(t, "high", *forwarded, "each WebSocket turn must use its latest configuration update")
+}

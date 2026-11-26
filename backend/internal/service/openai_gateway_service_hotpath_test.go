@@ -990,6 +990,24 @@ func TestExtractOpenAIReasoningEffortFromBody(t *testing.T) {
 			wantValue: "medium",
 		},
 		{
+			name:      "当前 configuration_update 覆盖顶层默认 effort",
+			body:      []byte(`{"model":"gpt-6.2-sol","reasoning":{"effort":"medium"},"input":[{"role":"user","content":"hi"},{"type":"configuration_update","reasoning":{"effort":"xhigh"}}]}`),
+			model:     "gpt-6.2-sol",
+			wantValue: "xhigh",
+		},
+		{
+			name:      "最后一次 configuration_update 决定当前 effort",
+			body:      []byte(`{"model":"gpt-6.2-sol","reasoning":{"effort":"medium"},"input":[{"type":"configuration_update","reasoning":{"effort":"xhigh"}},{"role":"user","content":"continue"},{"type":"configuration_update","reasoning":{"effort":"high"}}]}`),
+			model:     "gpt-6.2-sol",
+			wantValue: "high",
+		},
+		{
+			name:      "无动态 effort 时回退到顶层默认值",
+			body:      []byte(`{"model":"gpt-6.2-sol","reasoning":{"effort":"medium"},"input":[{"type":"configuration_update","text":{"verbosity":"low"}}]}`),
+			model:     "gpt-6.2-sol",
+			wantValue: "medium",
+		},
+		{
 			name:      "兼容 reasoning_effort",
 			body:      []byte(`{"reasoning_effort":"x-high"}`),
 			model:     "",

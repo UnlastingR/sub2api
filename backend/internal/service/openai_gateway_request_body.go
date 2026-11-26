@@ -1020,6 +1020,10 @@ func getOpenAIReasoningEffortFromReqBody(reqBody map[string]any, requestedModel 
 		return "", false
 	}
 
+	if effort := latestResponsesInputEffortFromReqBody(reqBody); effort != "" {
+		return normalizeOpenAIReasoningEffortForModel(effort, requestedModel), true
+	}
+
 	// Primary: reasoning.effort
 	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
 		if effort, ok := reasoning["effort"].(string); ok {
@@ -1033,6 +1037,24 @@ func getOpenAIReasoningEffortFromReqBody(reqBody map[string]any, requestedModel 
 	}
 
 	return "", false
+}
+
+func latestResponsesInputEffortFromReqBody(reqBody map[string]any) string {
+	if reqBody == nil {
+		return ""
+	}
+	items, _ := reqBody["input"].([]any)
+	for i := len(items) - 1; i >= 0; i-- {
+		item, _ := items[i].(map[string]any)
+		if item["type"] != responsesConfigurationUpdate {
+			continue
+		}
+		reasoning, _ := item["reasoning"].(map[string]any)
+		if effort, _ := reasoning["effort"].(string); strings.TrimSpace(effort) != "" {
+			return strings.TrimSpace(effort)
+		}
+	}
+	return ""
 }
 
 func deriveOpenAIReasoningEffortFromModel(model string) string {
@@ -1917,7 +1939,13 @@ func isOpenAICodexModel(model string) bool {
 // 非空候选；body 未携带 effort 时的模型后缀推导依次尝试每个候选——OAuth 的
 // normalizeCodexModel 会剥掉 upstreamModel 的 effort 后缀，只有原始模型名还留着。
 func extractOpenAIReasoningEffortFromBody(body []byte, modelCandidates ...string) *string {
-	reasoningEffort := strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String())
+	// Responses clients may keep the top-level effort as a session default while
+	// changing the effective effort for the current turn through input-level
+	// configuration_update items. The latest update wins over the top-level value.
+	reasoningEffort := strings.TrimSpace(latestResponsesInputEffort(body))
+	if reasoningEffort == "" {
+		reasoningEffort = strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String())
+	}
 	if reasoningEffort == "" {
 		reasoningEffort = strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())
 	}
@@ -2848,16 +2876,8 @@ func CanonicalRequestedReasoningEffortFromReqBody(reqBody map[string]any, modelC
 			raw = strings.TrimSpace(effort)
 		}
 	}
-	items, _ := reqBody["input"].([]any)
-	for i := len(items) - 1; i >= 0; i-- {
-		item, _ := items[i].(map[string]any)
-		if item["type"] == responsesConfigurationUpdate {
-			reasoning, _ := item["reasoning"].(map[string]any)
-			if effort, _ := reasoning["effort"].(string); strings.TrimSpace(effort) != "" {
-				raw = effort
-				break
-			}
-		}
+	if effort := latestResponsesInputEffortFromReqBody(reqBody); effort != "" {
+		raw = effort
 	}
 	if raw != "" {
 		return optionalTrimmedStringPtr(normalizeReasoningEffortMappingSource(raw))

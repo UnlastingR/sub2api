@@ -78,6 +78,22 @@ func TestExtractOpenAIReasoningEffortModelCandidates(t *testing.T) {
 	require.Equal(t, "high", *got)
 }
 
+func TestExtractOpenAIReasoningEffortUsesLatestConfigurationUpdate(t *testing.T) {
+	reqBody := map[string]any{
+		"model":     "gpt-6.2-sol",
+		"reasoning": map[string]any{"effort": "medium"},
+		"input": []any{
+			map[string]any{"type": "configuration_update", "reasoning": map[string]any{"effort": "xhigh"}},
+			map[string]any{"role": "user", "content": "continue"},
+			map[string]any{"type": "configuration_update", "reasoning": map[string]any{"effort": "high"}},
+		},
+	}
+
+	got := extractOpenAIReasoningEffort(reqBody, "gpt-6.2-sol")
+	require.NotNil(t, got)
+	require.Equal(t, "high", *got, "map-based WebSocket forwarding must use the latest per-turn configuration update")
+}
+
 // 回归：OAuth 账号请求后缀式模型（无显式 reasoning 字段）时，上游模型被
 // normalizeCodexModel 剥掉 effort 后缀，用量元数据的 effort 必须仍能从
 // 原始模型名后缀推导出来。
